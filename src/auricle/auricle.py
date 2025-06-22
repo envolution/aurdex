@@ -38,27 +38,13 @@ from textual.timer import Timer
 
 from rich.syntax import Syntax  # code highlighting
 
-from typing import TYPE_CHECKING
-
-if TYPE_CHECKING:
-    import pygit2  # pyright: ignore
-else:
-    try:
-        import pygit2
-
-        PYGIT2_AVAILABLE = True
-    except ImportError:
-        PYGIT2_AVAILABLE = False
-        pygit2 = None  # type: ignore
-"""
 try:
     import pygit2
 
     PYGIT2_AVAILABLE = True
 except ImportError:
     PYGIT2_AVAILABLE = False
-    pygit2 = None  # To satisfy type hints if not available
-"""
+    pygit2 = None  # type: ignore
 
 try:
     import pyalpm

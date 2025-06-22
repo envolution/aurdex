@@ -6,12 +6,10 @@ authors = [{ name = "involution" }]
 license = { text = "Apache-2.0" }
 readme = "README.md"
 requires-python = ">=3.9"
-dependencies = [
-  "textual>=0.49.0",
-  "rich>=13.0.0",
-  "appdirs>=1.4.4",
-  "pygit2; type_checking",
-]
+dependencies = ["textual>=0.49.0", "rich>=13.0.0", "appdirs>=1.4.4"]
+[project.optional-dependencies]
+git = ["pygit2"]
+aplm = ["pyalpm"]
 
 [project.scripts]
 aurbrowser = "aurbrowser:main"
