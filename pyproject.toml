@@ -1,0 +1,27 @@
+[project]
+name = "aurbrowser"
+version = "0.1.0"
+description = "A simple TUI browser for the AUR"
+authors = [{ name = "involution" }]
+license = { text = "MIT" }
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = [
+  "textual>=0.49.0",
+  "rich>=13.0.0",
+  "appdirs>=1.4.4",
+  "pygit2; type_checking",
+]
+
+[project.scripts]
+aurbrowser = "aurbrowser:main"
+
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
