@@ -13,6 +13,9 @@ import urllib.request
 import gzip
 import traceback
 
+import fnmatch
+import re
+
 from textual import on
 from textual.coordinate import Coordinate
 
@@ -1339,31 +1342,35 @@ class auricle(App):
 
     def filter_packages(self, search_term: str) -> None:
         self.search_term = search_term.lower()
-
         current_packages = self.packages  # Start with all packages
 
         # Apply text search first if present
         if self.search_term:
             temp_filtered = []
+
+            # Check if it looks like a regex pattern (contains regex special chars)
+            is_regex = any(char in self.search_term for char in r"[]{}()+^$|\\")
+
             for pkg in current_packages:
-                searchable_text = " ".join(
-                    filter(
-                        None,
-                        [  # Filter out None values before joining
-                            str(pkg.get("Name", "")),
-                            str(pkg.get("Description", "")),
-                            str(pkg.get("Maintainer", "")),
-                            " ".join(pkg.get("Keywords", [])),
-                            " ".join(
-                                cm for cm in pkg.get("CoMaintainers", []) if cm
-                            ),  # Filter None co-maintainers
-                            " ".join(pkg.get("Depends", [])),
-                            str(pkg.get("URL", "")),
-                        ],
-                    )
-                ).lower()
-                if self.search_term in searchable_text:
-                    temp_filtered.append(pkg)
+                # Build searchable text from Name and Keywords only
+                name = str(pkg.get("Name", "")).lower()
+                keywords = " ".join(pkg.get("Keywords", [])).lower()
+                searchable_text = f"{name} {keywords}".strip()
+
+                if is_regex:
+                    try:
+                        # Try regex search
+                        if re.search(self.search_term, searchable_text, re.IGNORECASE):
+                            temp_filtered.append(pkg)
+                    except re.error:
+                        # Fall back to wildcard if regex is invalid
+                        if fnmatch.fnmatch(searchable_text, f"*{self.search_term}*"):
+                            temp_filtered.append(pkg)
+                else:
+                    # Use wildcard matching (supports * and ?)
+                    if fnmatch.fnmatch(searchable_text, f"*{self.search_term}*"):
+                        temp_filtered.append(pkg)
+
             current_packages = temp_filtered
 
         # Apply checkbox/input filters
