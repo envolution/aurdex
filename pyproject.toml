@@ -12,7 +12,7 @@ git = ["pygit2"]
 aplm = ["pyalpm"]
 
 [project.scripts]
-aurbrowser = "auricle:main"
+auricle = "auricle:main"
 
 [build-system]
 requires = ["setuptools>=61"]
