@@ -1,9 +1,9 @@
 [project]
-name = "aurbrowser"
-version = "0.1.0"
+name = "auricle"
+version = "0.0.1"
 description = "A simple TUI browser for the AUR"
 authors = [{ name = "involution" }]
-license = { text = "MIT" }
+license = { text = "Apache-2.0" }
 readme = "README.md"
 requires-python = ">=3.9"
 dependencies = [
