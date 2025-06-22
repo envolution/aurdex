@@ -984,7 +984,7 @@ class GitViewModal(ModalScreen[None]):
         self.perform_git_operation()  # Re-run the git operation
 
 
-class AURBrowser(App):
+class auricle(App):
     """Main AUR Browser application"""
 
     CSS = """
@@ -1129,9 +1129,9 @@ class AURBrowser(App):
         self.chunk_size = 1000
         self.loaded_count = 0
 
-        self.config_path_dir = appdirs.user_config_dir(appname="AURBrowser")
+        self.config_path_dir = appdirs.user_config_dir(appname="auricle")
         self.config_file = os.path.join(self.config_path_dir, "filters.json")
-        self.git_cache_path = appdirs.user_cache_dir(appname="AURBrowser")
+        self.git_cache_path = appdirs.user_cache_dir(appname="auricle")
 
         self.config_data_keys = [
             "filters",
@@ -1766,7 +1766,7 @@ class AURBrowser(App):
 
     def action_sort(self) -> None:
         self.app.log(
-            f"AURBrowser.action_sort: Opening SortModal. self.current_sort='{self.current_sort}', self.current_sort_reverse={self.current_sort_reverse}"
+            f"auricle.action_sort: Opening SortModal. self.current_sort='{self.current_sort}', self.current_sort_reverse={self.current_sort_reverse}"
         )  # DEBUG
         sort_modal = SortModal(
             current_sort_key=self.current_sort,
@@ -1872,7 +1872,7 @@ class AURBrowser(App):
 
 
 def main():
-    app = AURBrowser()
+    app = auricle()
     app.run()
     app.save_app_config()  # Save filters when app exits normally
 
