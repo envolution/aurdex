@@ -1,6 +1,6 @@
 [project]
 name = "auricle"
-version = "0.0.1"
+version = "0.0.2"
 description = "A simple TUI browser for the AUR"
 authors = [{ name = "involution" }]
 license = { text = "Apache-2.0" }
