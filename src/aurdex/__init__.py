@@ -1,1 +1,1 @@
-from .auricle import main
+from .aurdex import main
