@@ -1,12 +1,12 @@
-# auricle
+# aurdex
 
-**auricle** is a terminal user interface (TUI) for browsing AUR package metadata.
+**aurdex** is a terminal user interface (TUI) for browsing AUR package metadata.
 
 - Filter and search packages by name, maintainer, status, and more
 - View detailed metadata, dependencies, and reverse dependencies
 - Explore package git repositories and commit history
 
-> **Note**: auricle is **not** an AUR helper. It does **not** install or build packages.  
+> **Note**: aurdex is **not** an AUR helper. It does **not** install or build packages.  
 > It’s designed for **viewing package information** and understanding dependency relationships.
 ![AUR_Package_Browser_2025-06-22T16_21_56_158839](https://github.com/user-attachments/assets/e05cf697-137a-4186-9bc3-04e1f2b972aa)
 ![AUR_Package_Browser_2025-06-22T16_22_25_364038](https://github.com/user-attachments/assets/ec024005-34b1-4ba2-9d3d-1a1834cb329c)
