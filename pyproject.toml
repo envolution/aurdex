@@ -12,7 +12,7 @@ git = ["pygit2"]
 aplm = ["pyalpm"]
 
 [project.scripts]
-auricle = "aurdex:main"
+aurdex = "aurdex:main"
 
 [build-system]
 requires = ["setuptools>=61"]
