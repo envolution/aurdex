@@ -1,7 +1,7 @@
 [project]
 name = "aurdex"
 version = "0.0.2.4"
-description = "A simple TUI browser for the AUR"
+description = "terminal user interface for browsing AUR package metadata"
 authors = [{ name = "involution" }]
 license = { text = "Apache-2.0" }
 readme = "README.md"

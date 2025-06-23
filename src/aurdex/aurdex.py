@@ -17,6 +17,7 @@ import fnmatch
 import re
 
 from textual import on
+from textual.events import Key
 from textual.coordinate import Coordinate
 
 from textual.app import App, ComposeResult
@@ -542,6 +543,31 @@ class PackageDetails(VerticalScroll):
         self.update("".join(content_parts))
 
 
+class CommentsModal(ModalScreen[None]):
+    DEFAULT_CSS = """
+    GitViewModal {
+        layout: vertical;
+    #    padding: 1 2;
+        background: $surface;
+        border: round $primary;
+    #    width: 85%;
+    #    height: 85%;
+        width: 1fr;
+        height: 1fr;
+    }
+    """
+    BINDINGS = [
+        Binding("escape", "close_modal", "Close", show=True),
+        Binding("ctrl+q", "close_modal", "Close", show=False),
+    ]
+
+    def __init__(self, package_data: Dict[str, Any], **kwargs):
+        super().__init__(**kwargs)
+        self.package_data = package_data
+        self.package_base = self.package_data.get("PackageBase")
+        self.comment_url = f"https://aur.archlinux.org/{self.package_base}"
+
+
 class GitViewModal(ModalScreen[None]):
     """Modal to display Git repository details for a package."""
 
@@ -654,6 +680,7 @@ class GitViewModal(ModalScreen[None]):
     BINDINGS = [
         Binding("escape", "close_modal", "Close", show=True),
         Binding("ctrl+r", "force_update_repo", "Force Update Repo", show=True),
+        Binding("ctrl+q", "close_modal", "Close", show=False),
     ]
 
     def __init__(self, package_data: Dict[str, Any], cache_base_path: str, **kwargs):
@@ -1092,18 +1119,15 @@ class aurdex(App):
         Binding("f", "filter", "Filter", show=True),
         Binding("r", "refresh", "Refresh", show=True),
         Binding("R", "reset_filters", "Reset Filters", show=True),
+        Binding("c", "view_comments", "View Comments", show=True),
         Binding("U", "download_from_aur", "Update from AUR", show=True),
         Binding("j", "cursor_down", "Down", show=False),
         Binding("k", "cursor_up", "Up", show=False),
         Binding("g", "cursor_top", "Top", show=False),
-        Binding(
-            "G", "cursor_bottom", "Bottom", show=False
-        ),  # Changed from shift+g to G
+        Binding("G", "cursor_bottom", "Bottom", show=False),
         Binding("ctrl+d", "page_down", "Page Down", show=False),
         Binding("ctrl+u", "page_up", "Page Up", show=False),
-        Binding(
-            "enter", "select_package", "View Git Repo", show=True
-        ),  # Changed description
+        Binding("z", "open_git_view", "View Git Repo", show=False),
         Binding("escape", "clear_search", "Clear Search", show=False),
     ]
 
@@ -1139,7 +1163,7 @@ class aurdex(App):
 
         self.provide_db: Optional[ProvideDB] = None
         self._dep_resolve_timer: Optional[Timer] = None
-        self.DEP_RESOLVE_DELAY: float = 0.5  # seconds for delay before resolving deps
+        self.DEP_RESOLVE_DELAY: float = 1.0  # seconds for delay before resolving deps
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
@@ -1694,13 +1718,21 @@ class aurdex(App):
             # If no package is selected (e.g., table is empty), clear details
             details_pane.update("Select a package to see details.")
 
-    @on(DataTable.RowSelected, "#package-table")  # This is for 'Enter' press
-    def on_package_selected_for_git_view(self, event: DataTable.RowSelected) -> None:
-        if not event.row_key.value:
-            self.notify("No package selected (invalid key).", severity="warning")
+    @on(
+        Key
+    )  # DataTable swallows 'enter' so we have to handle it separately from bindings
+    async def handle_enter_key(self, event: Key) -> None:
+        table = self.query_one("#package-table")
+        if event.key == "enter" and table.has_focus:
+            await self.action_open_git_view()
+
+    async def action_open_git_view(self) -> None:
+        selected = self.get_selected_package()
+        if selected is None:
+            self.notify("No package selected.", severity="warning")
             return
 
-        package_id_str = str(event.row_key.value)
+        package_id_str = str(selected["ID"])
         package = self.get_package_by_id(package_id_str)
 
         if package:
