@@ -8,11 +8,10 @@
 
 > **Note**: aurdex is **not** an AUR helper. It does **not** install or build packages.  
 > It’s designed for **viewing package information** and understanding dependency relationships.
-
-![AUR_Package_Browser_2025-06-22T16_21_56_158839](https://github.com/user-attachments/assets/e05cf697-137a-4186-9bc3-04e1f2b972aa)
-![AUR_Package_Browser_2025-06-22T16_22_25_364038](https://github.com/user-attachments/assets/ec024005-34b1-4ba2-9d3d-1a1834cb329c)
-![AUR_Package_Browser_2025-06-22T16_22_12_416136](https://github.com/user-attachments/assets/4fef6e0e-52d6-4498-bdc8-44ca0e65a8c9)
-
+![AUR_Package_Browser_2025-06-24T20_40_26_492693](https://github.com/user-attachments/assets/d63b2ba5-e6cb-4c4d-a31e-6b355120fdcb)
+![AUR_Package_Browser_2025-06-24T20_40_37_345778](https://github.com/user-attachments/assets/cf1bcaba-79b1-47f6-99d8-7afeb6105611)
+![AUR_Package_Browser_2025-06-24T20_40_43_800563](https://github.com/user-attachments/assets/11398438-f363-49f2-a42b-7ae9ce433228)
+![AUR_Package_Browser_2025-06-24T20_42_26_423139](https://github.com/user-attachments/assets/bece2564-7133-4436-a665-144311c83e29)
 
 # Installation
 The aurdex tool is available in the AUR (Arch User Repository).
