@@ -11,7 +11,7 @@ dependencies = [
   "rich>=13.0.0",
   "appdirs>=1.4.4",
   "beautifulsoup4>=4.13",
-  "https>=0.27.0",
+  "httpx>=0.27.0",
 ]
 [project.optional-dependencies]
 git = ["pygit2"]
