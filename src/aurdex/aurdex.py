@@ -1,27 +1,28 @@
 #!/usr/bin/env python3
-"""
-AUR Package Browser TUI
-A Textual-based terminal interface for browsing AUR package metadata
-"""
 
-import json
-from datetime import datetime
-from typing import Optional, List, Dict, Any, Tuple
-import appdirs
 import os
-import urllib.request
-import gzip
-import traceback
+import appdirs
+from datetime import datetime
 
-import fnmatch
 import re
+import fnmatch
+import httpx
+import json
+import gzip
 
-from textual import on
-from textual.events import Key
+from typing import Optional, List, Dict, Any, Tuple
+
+from textual import on, work
+from textual.events import Key, MouseDown
 from textual.coordinate import Coordinate
-
+from textual.binding import Binding
+from textual.screen import ModalScreen
+from textual.timer import Timer
+from textual.reactive import reactive
+from textual.logging import TextualHandler
 from textual.app import App, ComposeResult
 from textual.containers import Container, Horizontal, Vertical, VerticalScroll
+from textual.widget import Widget
 from textual.widgets import (
     Header,
     Footer,
@@ -34,14 +35,17 @@ from textual.widgets import (
     RadioButton,
     Label,
     DirectoryTree,
+    LoadingIndicator,
 )
-from textual.binding import Binding
-from textual.screen import ModalScreen
-from textual import work
-from textual.timer import Timer
 
-from rich.syntax import Syntax  # code highlighting
+from rich.syntax import Syntax
+from rich.text import Text
+from rich.errors import StyleSyntaxError, MissingStyle
 
+from bs4 import BeautifulSoup, Tag
+from bs4.element import NavigableString
+
+# optionals
 try:
     import pygit2
 
@@ -54,6 +58,12 @@ try:
     import pyalpm
 except ImportError:
     pyalpm = None
+
+import logging as log
+import traceback
+
+log.root.handlers.clear()
+log.basicConfig(level=log.DEBUG, handlers=[TextualHandler()], force=True)
 
 
 class ProvideDB:
@@ -274,7 +284,7 @@ class SortModal(ModalScreen[Optional[Dict[str, Any]]]):
 
     def on_mount(self) -> None:
         """Pre-select the current sort option."""
-        self.app.log(
+        log.info(
             f"SortModal.on_mount: Initializing with current_sort_key='{self.current_sort_key}', current_sort_reverse={self.current_sort_reverse}"
         )
         try:
@@ -288,11 +298,11 @@ class SortModal(ModalScreen[Optional[Dict[str, Any]]]):
                     found_button = True
                     break
             if not found_button:
-                self.app.log(
+                log.warning(
                     f"SortModal.on_mount: Sort key '{self.current_sort_key}' did not match any RadioButton ID."
                 )
         except Exception as e:
-            self.app.log(f"SortModal.on_mount: Error pre-selecting sort option: {e}")
+            log.error(f"SortModal.on_mount: Error pre-selecting sort option: {e}")
 
     @on(Button.Pressed, "#sort-apply")
     def apply_sort(self) -> None:
@@ -303,7 +313,7 @@ class SortModal(ModalScreen[Optional[Dict[str, Any]]]):
             # The id of the pressed RadioButton is our string sort key
             sort_key_from_button = radio_set.pressed_button.id
 
-            self.app.log(
+            log.info(
                 f"SortModal apply_sort: sort_key_from_button='{sort_key_from_button}' (type: {type(sort_key_from_button)})"
             )
 
@@ -316,7 +326,7 @@ class SortModal(ModalScreen[Optional[Dict[str, Any]]]):
                 }
             )
         else:
-            self.app.log("SortModal apply_sort: No radio button pressed.")
+            log.warning("SortModal apply_sort: No radio button pressed.")
             self.dismiss(None)  # No option selected
 
     @on(Button.Pressed, "#sort-cancel")
@@ -543,31 +553,6 @@ class PackageDetails(VerticalScroll):
         self.update("".join(content_parts))
 
 
-class CommentsModal(ModalScreen[None]):
-    DEFAULT_CSS = """
-    GitViewModal {
-        layout: vertical;
-    #    padding: 1 2;
-        background: $surface;
-        border: round $primary;
-    #    width: 85%;
-    #    height: 85%;
-        width: 1fr;
-        height: 1fr;
-    }
-    """
-    BINDINGS = [
-        Binding("escape", "close_modal", "Close", show=True),
-        Binding("ctrl+q", "close_modal", "Close", show=False),
-    ]
-
-    def __init__(self, package_data: Dict[str, Any], **kwargs):
-        super().__init__(**kwargs)
-        self.package_data = package_data
-        self.package_base = self.package_data.get("PackageBase")
-        self.comment_url = f"https://aur.archlinux.org/{self.package_base}"
-
-
 class GitViewModal(ModalScreen[None]):
     """Modal to display Git repository details for a package."""
 
@@ -773,9 +758,9 @@ class GitViewModal(ModalScreen[None]):
                 self.repo = pygit2.Repository(self.repo_path)
 
                 remote = self.repo.remotes["origin"]
-                self.app.log(f"Fetching from remote {remote.name} ({remote.url})")
+                log.info(f"Fetching from remote {remote.name} ({remote.url})")
                 remote.fetch()
-                self.app.log("Fetch complete.")
+                log.info("Fetch complete.")
 
                 # Determine the remote head reference (e.g., refs/remotes/origin/master)
                 remote_head_ref_name = None
@@ -790,9 +775,7 @@ class GitViewModal(ModalScreen[None]):
                     try:
                         if self.repo.lookup_reference(ref_name_option):
                             remote_head_ref_name = ref_name_option
-                            self.app.log(
-                                f"Found remote head ref: {remote_head_ref_name}"
-                            )
+                            log.info(f"Found remote head ref: {remote_head_ref_name}")
                             break
                     except pygit2.KeyError:  # Ref not found
                         continue
@@ -868,11 +851,11 @@ class GitViewModal(ModalScreen[None]):
         except pygit2.GitError as e:  # Catch specific pygit2 errors
             err_msg = f"[b red]Git operation error: {e}[/]\nURL: {self.repo_url}\nPath: {self.repo_path}"
             self.app.call_from_thread(status_label.update, err_msg)
-            self.app.log(f"Pygit2 Error: {e} - {traceback.format_exc()}")
+            log.error(f"Pygit2 Error: {e} - {traceback.format_exc()}")
         except Exception as e:  # Catch other general errors
             err_msg = f"[b red]Unexpected error: {e}[/]"
             self.app.call_from_thread(status_label.update, err_msg)
-            self.app.log(f"General Error: {e} - {traceback.format_exc()}")
+            log.error(f"General Error: {e} - {traceback.format_exc()}")
 
     @on(DirectoryTree.FileSelected, "#git-file-tree")
     def show_file_content(self, event: DirectoryTree.FileSelected) -> None:
@@ -924,7 +907,7 @@ class GitViewModal(ModalScreen[None]):
 
         except Exception as e:
             content_view.update(f"[b red]Error reading file {file_path.name}: {e}[/]")
-            self.app.log(f"File Read Error: {e} - {traceback.format_exc()}")
+            log.error(f"File Read Error: {e} - {traceback.format_exc()}")
 
     @on(DataTable.RowSelected, "#git-commit-history")
     def show_commit_diff(self, event: DataTable.RowSelected) -> None:
@@ -973,7 +956,7 @@ class GitViewModal(ModalScreen[None]):
 
         except Exception as e:
             content_view.update(f"[b red]Error generating diff: {e}[/]")
-            self.app.log(f"Diff Generation Error: {e} - {traceback.format_exc()}")
+            log.error(f"Diff Generation Error: {e} - {traceback.format_exc()}")
 
     @on(Button.Pressed, "#git-close-button")
     def action_close_modal(self) -> None:
@@ -1000,6 +983,518 @@ class GitViewModal(ModalScreen[None]):
         self.perform_git_operation()  # Re-run the git operation
 
 
+class CommentsModal(ModalScreen[None]):
+    DEFAULT_CSS = """
+    CommentsModal {
+        layout: vertical;
+        background: $panel;
+        border: round $accent;
+        width: 1fr;
+        height: 1fr;
+    }
+
+    #modal-title {
+        content-align: center middle;
+        height: auto;
+        text-style: bold;
+    }
+
+    #comments-scroller {
+        /* Styles for the VerticalScroll containing comments */
+    }
+    
+    #loading {
+        width: 1fr;
+        height: 1fr;
+        align: center middle;
+    }
+    #loading LoadingIndicator {
+        width: auto;
+        height: auto;
+    }
+
+    .comment-block.is-pinned-outer {
+    }
+
+    .pinned-content-wrapper {
+        layout: vertical;
+        background: $secondary;
+        border: round $success-darken-1;
+        padding: 1 1;
+        height: auto;
+    }
+
+    .comment-block {
+        border: round $accent;
+        background: $boost;
+        height: auto;
+        layout: vertical;
+        margin: 1 1 1 1;
+    }
+
+    #comment-header {
+        layout: horizontal;
+        content-align: left middle;
+        height:auto;
+        overflow: hidden auto; 
+    }
+
+    .comment-number {
+        color: $primary;
+        text-style: bold;
+        margin-right: 1;
+        margin-left: 1;
+        width:auto;
+    }
+
+    .comment-user {
+        color: $primary;
+        text-style: bold;
+        width:auto;
+        margin-right: 1;
+    }
+
+    .comment-date {
+        color: $accent-darken-1;
+        text-style: italic;
+        margin-right: 1;
+        width:auto;
+    }
+
+    .comment-edited {
+        color: $warning;
+        text-style: italic;
+        width:auto;
+        margin-right: 1;
+    }
+    .comment-pinned-label {
+        margin-left: 1;
+        width:auto;
+    }
+
+    .comment-paragraph {
+        height: auto;
+        margin: 1 1 1 1;
+        text-wrap: wrap;
+    }
+    .comment-paragraph Link { /* Targeting the styled Text objects */
+        text-style: underline;
+    }
+
+    .comment-code-block {
+        background: $background-darken-2;
+        padding: 1;
+        border: round $primary;
+        height: auto;
+        margin-top: 1;
+        overflow: auto;
+        text-wrap: nowrap;
+    }
+
+    .centered-text {
+        text-align: center;
+        margin: 1 0;
+        color: $text-muted;
+    }
+
+    .error-message {
+        color: $error;
+        text-align: center;
+        margin: 1 0;
+    }
+    """
+
+    BINDINGS = [
+        Binding("escape", "close_modal", "Close", show=True),
+        Binding("ctrl+q", "close_modal", "Close", show=False),
+        Binding("n", "next_comments", "Next Comments", show=True),
+    ]
+
+    COMMENT_BATCH_SIZE = 10
+    _current_offset = reactive(0)
+    _all_comments_loaded = reactive(False)
+    _is_loading_more = reactive(False)
+
+    def __init__(self, package_data: dict[str, Any]):
+        super().__init__()
+        self.package_base = package_data.get("PackageBase", "unknown_package")
+        self.parsed_comments: list[dict[str, Any]] = []
+        self.comment_counter = 0
+        self._pinned_rendered = False
+
+    def compose(self) -> ComposeResult:
+        # Ensure Label is imported, fixed in previous step
+        yield Label(f"Comments for {self.package_base}", id="modal-title")
+        yield Container(LoadingIndicator(), id="loading")
+        yield VerticalScroll(id="comments-scroller")
+        yield Footer()
+
+    async def on_mount(self) -> None:
+        # Using notify for debugging initial load
+        self.query_one("#comments-scroller", VerticalScroll).display = False
+        await self._load_and_render_comments()
+        log.debug("Comments loading process finished (check UI for results).")
+
+    async def _fetch_aur_page_html(
+        self, package_url: str
+    ) -> Tuple[Optional[str], bool]:
+        self.notify(f"Fetching comments from: {package_url}")
+        headers = {
+            "User-Agent": "TextualCommentsModalClient/1.0",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+            "Accept-Language": "en-US,en;q=0.5",
+        }
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                response = await client.get(
+                    package_url, headers=headers, follow_redirects=True
+                )
+                response.raise_for_status()
+                return response.text, True
+        except httpx.HTTPStatusError as e:
+            log.error(f"HTTP error: {e} for {package_url}")
+        except httpx.RequestError as e:
+            log.error(f"Request error: {e} for {package_url}")
+        except Exception as e:
+            log.error(f"Unexpected error during fetch: {e} for {package_url}")
+        return None, False
+
+    def _convert_html_node_to_textual_widget(
+        self, node: Tag | NavigableString
+    ) -> Optional[Widget | Text]:
+        """Converts a BeautifulSoup node into a Textual widget or Rich Text object."""
+        if isinstance(node, NavigableString):
+            text = str(node)
+            processed_text = text.replace("[", "\\[")  # Escape literal brackets
+            return Text(processed_text) if text else None
+
+        if not isinstance(node, Tag):
+            return None
+
+        tag_name = node.name.lower()
+
+        def _process_inline_children(current_node: Tag) -> Text:
+            content_text = Text()
+            for child in current_node.contents:
+                child_renderable = self._convert_html_node_to_textual_widget(child)
+                if child_renderable:
+                    if isinstance(child_renderable, Text):
+                        content_text.append(child_renderable)
+                    elif isinstance(child_renderable, Widget):
+                        if hasattr(child_renderable.renderable, "plain"):
+                            content_text.append(child_renderable.renderable.plain)
+                        else:
+                            content_text.append(str(child_renderable))
+            return content_text
+
+        if tag_name == "p":
+            paragraph_text = _process_inline_children(node)
+            if paragraph_text.plain.strip():
+                return Static(
+                    paragraph_text,
+                    classes="comment-paragraph",
+                    expand=True,
+                    shrink=False,
+                )
+            return None
+
+        elif tag_name == "a":
+            raw_href = node.get("href", "#") or "#"
+            safe_href = raw_href.split()[0].split(">")[0].strip()
+            inner_text = _process_inline_children(node).plain.strip() or safe_href
+            link_text = Text(inner_text, style="underline")
+            try:
+                link_text.stylize(f"link {safe_href}")
+            except (MissingStyle, StyleSyntaxError):
+                log.warning(f"Skipped malformed link: {raw_href}")
+            return link_text
+
+        elif tag_name in ("strong", "b"):
+            strong_text = _process_inline_children(node)
+            if strong_text.plain.strip():
+                strong_text.stylize("bold")
+                return strong_text
+            return None
+
+        elif tag_name in ("em", "i"):
+            italic_text = _process_inline_children(node)
+            if italic_text.plain.strip():
+                italic_text.stylize("italic")
+                return italic_text
+            return None
+
+        elif tag_name == "pre":
+            code_node = node.find("code")
+            target_node_for_text = code_node if code_node else node
+            code_text = target_node_for_text.get_text(separator="")
+            if code_text:
+                return Static(
+                    Text(code_text),
+                    classes="comment-code-block",
+                    expand=True,
+                    shrink=False,
+                )
+            return None
+
+        elif tag_name == "code":  # Inline code
+            inline_code_text = _process_inline_children(node)
+            if inline_code_text.plain.strip():
+                inline_code_text.stylize("reverse dim")
+                return inline_code_text
+            return None
+
+        elif tag_name == "br":
+            return Text("\n")
+
+        else:  # Handle other tags by rendering their inline content
+            fallback_text = _process_inline_children(node)
+            if fallback_text.plain.strip():
+                return fallback_text
+            return None
+
+    def _parse_aur_comment_html(self, html_content: str) -> List[Dict[str, Any]]:
+        """Parses AUR HTML string to extract comment data."""
+        log.debug("Parsing HTML content...")
+        soup = BeautifulSoup(html_content, "html.parser")
+        extracted_comments = []
+
+        comment_sections = soup.find_all("div", class_="comments package-comments")
+
+        for section_div in comment_sections:
+            section_is_pinned = False
+            section_header_div = section_div.find("div", class_="comments-header")
+            if section_header_div:
+                section_title_h3 = section_header_div.find("h3")
+                if section_title_h3:
+                    section_title_span = section_title_h3.find("span", class_="text")
+                    if (
+                        section_title_span
+                        and "Pinned Comments" in section_title_span.get_text()
+                    ):
+                        section_is_pinned = True
+
+            comment_header_tags = section_div.find_all("h4", class_="comment-header")
+
+            for header_tag in comment_header_tags:
+                comment_data: Dict[str, Any] = {"body_widgets": []}
+
+                header_text_content = header_tag.get_text(separator=" ", strip=True)
+                user_name_str = "Unknown User"
+                date_str = "Unknown Date"
+
+                separator = " commented on "
+                if separator in header_text_content:
+                    parts = header_text_content.split(separator, 1)
+                    user_name_str = parts[0].strip()
+                    if len(parts) > 1:
+                        date_str = parts[1].strip()
+                else:
+                    user_link_attempt = header_tag.find(
+                        "a", href=lambda href: href and href.startswith("/account/")
+                    )
+                    if user_link_attempt:
+                        user_name_str = user_link_attempt.get_text(strip=True)
+
+                comment_data["user"] = user_name_str
+
+                date_link_specific = header_tag.find("a", class_="date")
+                if date_link_specific:
+                    comment_data["date"] = date_link_specific.get_text(strip=True)
+                else:
+                    comment_data["date"] = date_str
+
+                edited_span = header_tag.find("span", class_="edited")
+                if edited_span:
+                    comment_data["edited"] = edited_span.get_text(strip=False).strip()
+                else:
+                    comment_data["edited"] = None
+
+                comment_data["pinned"] = section_is_pinned
+
+                content_div = header_tag.find_next_sibling(
+                    "div", class_="article-content"
+                )
+                if content_div:
+                    main_content_wrapper = content_div.find("div")
+                    if main_content_wrapper:
+                        for child_node in main_content_wrapper.children:
+                            widget_or_text = self._convert_html_node_to_textual_widget(
+                                child_node
+                            )
+                            if widget_or_text:
+                                if isinstance(widget_or_text, Text):
+                                    if widget_or_text.plain.strip():
+                                        comment_data["body_widgets"].append(
+                                            Static(
+                                                widget_or_text,
+                                                classes="comment-paragraph",
+                                                expand=True,
+                                                shrink=False,
+                                            )
+                                        )
+                                elif isinstance(widget_or_text, Widget):
+                                    comment_data["body_widgets"].append(widget_or_text)
+
+                if comment_data["body_widgets"] or (
+                    comment_data["user"] != "Unknown User"
+                ):
+                    extracted_comments.append(comment_data)
+                else:
+                    log.warning(
+                        f"Skipping comment block, no content or user found. Header: {header_tag.get_text(strip=True).strip()}"
+                    )
+        log.debug(
+            f"HTML parsing finished, found {len(extracted_comments)} comments."
+        )  # Notify on parsing completion
+        return extracted_comments
+
+    async def _load_and_render_comments(self, load_more: bool = False) -> None:
+        """Fetches, parses, and renders comments."""
+        log.debug(
+            f"Loading comments... (More: {load_more})"
+        )  # Notify about loading start
+        if self._all_comments_loaded or self._is_loading_more:
+            log.debug("Already loaded or currently loading comments.")
+            return
+
+        self._is_loading_more = True
+        loading_indicator_container = self.query_one("#loading", Container)
+        comments_scroller = self.query_one("#comments-scroller", VerticalScroll)
+
+        if not load_more:
+            log.debug("Performing initial load.")
+            self.comment_counter = 0
+            self._current_offset = 0
+            self.parsed_comments.clear()
+            comments_scroller.remove_children()
+            comments_scroller.display = False
+            loading_indicator_container.display = True
+        else:
+            log.debug("Loading next batch of comments.")
+            pass
+
+        aur_package_url = f"https://aur.archlinux.org/packages/{self.package_base}?O={self._current_offset}"
+        html_content, _ = await self._fetch_aur_page_html(aur_package_url)
+        has_next_page = False
+        if html_content:
+            soup_nav = BeautifulSoup(html_content, "html.parser")
+            has_next_page = bool(
+                soup_nav.find("a", class_="page", string=lambda s: s and "Next" in s)
+            )
+
+        if html_content:
+            newly_parsed_comments = self._parse_aur_comment_html(html_content)
+            if self._pinned_rendered:
+                newly_parsed_comments = [
+                    c for c in newly_parsed_comments if not c["pinned"]
+                ]
+
+            if not newly_parsed_comments and not load_more:
+                log.debug("No comments found for this package.")
+                comments_scroller.mount(
+                    Static("No comments found.", classes="info-message")
+                )
+            else:
+                log.debug(f"Rendering {len(newly_parsed_comments)} comments.")
+                for comment_data in newly_parsed_comments:
+                    if comment_data.get("pinned"):
+                        idx = 0
+                    else:
+                        self.comment_counter += 1
+                        idx = self.comment_counter
+                    comments_scroller.mount(self.render_comment(idx, comment_data))
+                if not self._pinned_rendered and any(
+                    c.get("pinned") for c in newly_parsed_comments
+                ):
+                    self._pinned_rendered = True
+
+                self.parsed_comments.extend(newly_parsed_comments)
+                self._current_offset += self.COMMENT_BATCH_SIZE
+
+                if not has_next_page:
+                    self._all_comments_loaded = True
+                    if comments_scroller.children:
+                        comments_scroller.mount(
+                            Static("--- No more comments ---", classes="centered-text")
+                        )
+        else:
+            if not load_more:
+                log.error("Failed to load comments.")
+                comments_scroller.mount(
+                    Static("Failed to load comments.", classes="error-message")
+                )
+            else:
+                log.error("Failed to load more comments")
+                self._all_comments_loaded = True
+                if comments_scroller.children:
+                    self.notify("--- No more comments (due to load error) ---")
+                    comments_scroller.mount(
+                        Static("--- No more comments ---", classes="centered-text")
+                    )
+
+        loading_indicator_container.display = False
+        comments_scroller.display = True
+        self._is_loading_more = False
+        log.debug("Finished loading comments.")
+
+        if (
+            not load_more
+            and comments_scroller.virtual_size.height <= comments_scroller.size.height
+            and not self._all_comments_loaded
+            and not self._is_loading_more
+        ):
+            log.debug(
+                "Initial content loaded, but screen not full. Attempting to load more."
+            )
+            self.call_later(self._load_and_render_comments, load_more=True)
+
+    def render_comment(self, idx: int, comment: dict[str, Any]) -> Container:
+        """Renders a single comment with its header and body."""
+        header_widgets = []
+        if idx:
+            header_widgets.append(Static(f"#{idx}", classes="comment-number"))
+
+        header_widgets.append(Static(comment["user"], classes="comment-user"))
+        header_widgets.append(Static(comment["date"], classes="comment-date"))
+
+        if comment.get("edited"):
+            header_widgets.append(
+                Static(f"✎ {comment['edited']}", classes="comment-edited")
+            )
+        if comment.get("pinned") or idx == 0:
+            header_widgets.append(Static("📌", classes="comment-pinned-label"))
+
+        header_container = Horizontal(*header_widgets, id="comment-header")
+
+        body_widgets_list = []
+        for widget in comment.get("body_widgets", []):
+            body_widgets_list.append(widget)
+
+        if comment.get("pinned"):
+            pinned_content_holder_children = [header_container] + body_widgets_list
+            pinned_content_holder = Container(
+                *pinned_content_holder_children, classes="pinned-content-wrapper"
+            )
+            return Container(
+                pinned_content_holder, classes="comment-block is-pinned-outer"
+            )
+        else:
+            regular_comment_children = [header_container] + body_widgets_list
+            return Container(*regular_comment_children, classes="comment-block")
+
+    def action_next_comments(self) -> None:
+        """Loads the next batch of comments."""
+        if not self._all_comments_loaded and not self._is_loading_more:
+            log.debug("Fetching next comments...")
+            self.call_later(self._load_and_render_comments, load_more=True)
+        elif self._all_comments_loaded:
+            self.notify("No more comments")
+
+    def action_close_modal(self) -> None:
+        """Closes the modal screen."""
+        self.dismiss()
+
+
 class aurdex(App):
     """Main AUR Browser application"""
 
@@ -1019,19 +1514,25 @@ class aurdex(App):
     #package-table {
         height: 1fr;
         border: round $accent;
-        background: $panel;
         align: center middle;
         scrollbar-gutter: stable;
         content-align: left middle;
+    }
+    #package-table:focus {
+        border: round $primary;
+        background: $panel;
     }
     
     #package-details {
         width: 60%;
         height: 1fr;
         border: round $accent;
-        background: $surface;
         padding: 1 1; /* top/bottom left/right */
     }
+    #package-details:focus {
+        border: round $primary;
+        background: $panel;
+    }        
     
     #search-container {
         height: auto; /* Adjusted for Label and Input */
@@ -1127,7 +1628,6 @@ class aurdex(App):
         Binding("G", "cursor_bottom", "Bottom", show=False),
         Binding("ctrl+d", "page_down", "Page Down", show=False),
         Binding("ctrl+u", "page_up", "Page Up", show=False),
-        Binding("z", "open_git_view", "View Git Repo", show=False),
         Binding("escape", "clear_search", "Clear Search", show=False),
     ]
 
@@ -1163,7 +1663,8 @@ class aurdex(App):
 
         self.provide_db: Optional[ProvideDB] = None
         self._dep_resolve_timer: Optional[Timer] = None
-        self.DEP_RESOLVE_DELAY: float = 1.0  # seconds for delay before resolving deps
+        self.DEP_RESOLVE_DELAY: float = 1.1  # seconds for delay before resolving deps
+        self._last_input = None
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
@@ -1183,8 +1684,16 @@ class aurdex(App):
     async def download_metadata(self):
         url = "https://aur.manjaro.org/packages-meta-ext-v1.json.gz"
         try:
-            urllib.request.urlretrieve(url, self.datafile)
-            self.notify(f"Download complete: {self.datafile}")
+            async with httpx.AsyncClient(
+                timeout=60.0, follow_redirects=True
+            ) as client:  # NEW
+                resp = await client.get(url)  # NEW
+                resp.raise_for_status()  # NEW
+                with open(self.datafile, "wb") as fp:  # NEW
+                    fp.write(resp.content)  # NEW
+
+            self.notify("Sync complete")
+            log.info(f"Download complete: {self.datafile}")
             self._load_package_data()
             self.action_refresh()
         except Exception as e:
@@ -1194,9 +1703,17 @@ class aurdex(App):
                 self.filtered_packages = []
                 self.update_package_list()
 
+    @on(Key)
+    def track_key(self, event: Key) -> None:
+        if event.key == "enter":
+            self._last_input = "keyboard"
+
+    @on(MouseDown)
+    def track_click(self, event: MouseDown) -> None:
+        self._last_input = "mouse"
+
     def _load_package_data(self):
         try:
-            self.notify(f"Loading package data from {self.datafile}...")
             with gzip.open(self.datafile, "rt", encoding="utf-8") as f:
                 self.packages = json.load(f)
 
@@ -1225,7 +1742,8 @@ class aurdex(App):
         )
 
         if not os.path.exists(self.datafile) or force_download:
-            self.notify("Downloading AUR metadata (packages-meta-ext-v1.json.gz)...")
+            self.notify("Syncing AUR metadata")
+            log.info(f"Syncing AUR metadata to {self.datafile}")
             self.download_metadata()
             return
 
@@ -1237,10 +1755,10 @@ class aurdex(App):
         Worker thread to resolve dependencies for a given package and update details pane.
         """
         if not self.provide_db or not package_data:
-            self.app.log("resolve_package_dependencies: No provide_db or package_data.")
+            log.warning("resolve_package_dependencies: No provide_db or package_data.")
             return
 
-        self.app.log(f"Resolving dependencies for: {package_data.get('Name')}")
+        log.debug(f"Resolving dependencies for: {package_data.get('Name')}")
         details_pane = self.query_one("#package-details", PackageDetails)
 
         enriched_deps: Dict[str, List[Dict]] = {}
@@ -1286,7 +1804,7 @@ class aurdex(App):
             package=package_data,  # Pass the original package data
             enriched_dependencies=enriched_deps,  # Pass the newly resolved data
         )
-        self.app.log(f"Finished resolving dependencies for: {package_data.get('Name')}")
+        log.debug(f"Finished resolving dependencies for: {package_data.get('Name')}")
 
     def on_mount(self) -> None:
         self.title = "AUR Package Browser"
@@ -1322,7 +1840,7 @@ class aurdex(App):
 
                 # Load filters
                 loaded_config_filters = loaded_config.get("filters", {})
-                self.app.log(
+                log.debug(
                     f"load_app_config: loaded_config_filters = {loaded_config_filters}"
                 )  # DEBUG
 
@@ -1345,7 +1863,6 @@ class aurdex(App):
                     "current_sort_reverse", False
                 )
 
-                self.notify("Loaded saved application configuration.")
             except Exception as e:
                 self.notify(
                     f"Failed to load app configuration: {e}", severity="warning"
@@ -1362,7 +1879,7 @@ class aurdex(App):
             # If no config file, ensure defaults are set (already done in __init__)
             self.notify("No configuration file found, using defaults.")
 
-        self.app.log(f"load_app_config: self.filters set to = {self.filters}")  # DEBUG
+        log.info(f"load_app_config: self.filters set to = {self.filters}")  # DEBUG
 
     def filter_packages(self, search_term: str) -> None:
         self.search_term = search_term.lower()
@@ -1700,7 +2217,7 @@ class aurdex(App):
                 try:
                     self._dep_resolve_timer.stop()  # Use stop() for timers started from main thread
                 except Exception as e:
-                    self.app.log(f"Error stopping timer: {e}")
+                    log.error(f"Error stopping timer: {e}")
                 self._dep_resolve_timer = None
 
             # 3. Set a new timer to call the worker with a copy of package data
@@ -1718,15 +2235,40 @@ class aurdex(App):
             # If no package is selected (e.g., table is empty), clear details
             details_pane.update("Select a package to see details.")
 
-    @on(
-        Key
-    )  # DataTable swallows 'enter' so we have to handle it separately from bindings
-    async def handle_enter_key(self, event: Key) -> None:
-        table = self.query_one("#package-table")
-        if event.key == "enter" and table.has_focus:
-            await self.action_open_git_view()
+    async def action_view_comments(self) -> None:
+        selected = self.get_selected_package()
+        if selected is None:
+            self.notify("No package selected.", severity="warning")
+            return
 
-    async def action_open_git_view(self) -> None:
+        package_id_str = str(selected["ID"])
+        package = self.get_package_by_id(package_id_str)
+
+        if package:
+            if not package.get("PackageBase"):
+                self.notify(
+                    "PackageBase missing, cannot fetch comments.",
+                    severity="error",
+                )
+                return
+
+            self.push_screen(CommentsModal(package_data=package))
+        else:
+            self.notify(
+                f"Could not retrieve package details for ID {package_id_str}.",
+                severity="error",
+            )
+
+    @on(DataTable.RowSelected, "#package-table")
+    async def action_open_git_view(self, event: DataTable.RowSelected) -> None:
+        # TODO: revisit this if RowSelected differentiates mouse click vs enter in future
+        if self._last_input == "keyboard":
+            pass
+        elif self._last_input == "mouse":
+            return  # try not to change modal on mouse clicks
+        else:
+            self.notify(f"Other event triggered row {event.row_key}")
+
         selected = self.get_selected_package()
         if selected is None:
             self.notify("No package selected.", severity="warning")
@@ -1790,7 +2332,7 @@ class aurdex(App):
         self.query_one("#package-table", DataTable).focus()
 
     def action_sort(self) -> None:
-        self.app.log(
+        log.info(
             f"aurdex.action_sort: Opening SortModal. self.current_sort='{self.current_sort}', self.current_sort_reverse={self.current_sort_reverse}"
         )  # DEBUG
         sort_modal = SortModal(
@@ -1844,31 +2386,42 @@ class aurdex(App):
         self.load_aur_packages(force_download=True)
 
     def action_cursor_down(self) -> None:
-        self.query_one("#package-table", DataTable).action_cursor_down()
-        # self.check_load_more() # Already handled by RowHighlighted
+        if isinstance(self.focused, DataTable):
+            self.focused.action_cursor_down()
+        if isinstance(self.focused, VerticalScroll):
+            self.focused.action_scroll_down()
 
     def action_cursor_up(self) -> None:
-        self.query_one("#package-table", DataTable).action_cursor_up()
+        if isinstance(self.focused, DataTable):
+            self.focused.action_cursor_up()
+        if isinstance(self.focused, VerticalScroll):
+            self.focused.action_scroll_up()
 
     def action_cursor_top(self) -> None:
-        table = self.query_one("#package-table", DataTable)
-        if table.row_count > 0:
-            table.move_cursor(row=0)
-            # table.move_cursor(row=0, column=table.cursor_column)
+        if isinstance(self.focused, DataTable):
+            table = self.query_one("#package-table", DataTable)
+            if table.row_count > 0:
+                table.move_cursor(row=0)
+                # table.move_cursor(row=0, column=table.cursor_column)
+        if isinstance(self.focused, VerticalScroll):
+            self.focused.action_scroll_home()
 
     def action_cursor_bottom(self) -> None:  # Bound to 'G'
-        table = self.query_one("#package-table", DataTable)
-        # Load all packages before going to bottom
-        while self.load_more_packages():
-            pass  # Keep loading until all are in self.displayed_packages
+        if isinstance(self.focused, DataTable):
+            table = self.query_one("#package-table", DataTable)
+            # Load all packages before going to bottom
+            while self.load_more_packages():
+                pass  # Keep loading until all are in self.displayed_packages
 
-        # After all are loaded, update table fully if new ones were added
-        # This check_load_more might have added some, but update_package_list ensures all displayed are in table
-        self.update_package_list()  # This will rebuild the table with all items
+            # After all are loaded, update table fully if new ones were added
+            # This check_load_more might have added some, but update_package_list ensures all displayed are in table
+            self.update_package_list()  # This will rebuild the table with all items
 
-        if table.row_count > 0:
-            table.move_cursor(row=table.row_count - 1)
-            # table.move_cursor(row=table.row_count - 1, column=table.cursor_column)
+            if table.row_count > 0:
+                table.move_cursor(row=table.row_count - 1)
+                # table.move_cursor(row=table.row_count - 1, column=table.cursor_column)
+        if isinstance(self.focused, VerticalScroll):
+            self.focused.action_scroll_end()
 
     def action_page_down(self) -> None:
         self.query_one("#package-table", DataTable).action_page_down()
