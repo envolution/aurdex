@@ -5,6 +5,7 @@
 - Filter and search packages by name, maintainer, status, and more
 - View detailed metadata, dependencies, and reverse dependencies
 - Explore package git repositories and commit history
+- View package comments from aurweb
 
 > **Note**: aurdex is **not** an AUR helper. It does **not** install or build packages.  
 > It’s designed for **viewing package information** and understanding dependency relationships.
