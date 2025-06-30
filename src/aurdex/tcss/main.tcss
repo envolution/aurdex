@@ -1,0 +1,111 @@
+Screen {
+    layout: vertical;
+    background: $background;
+    height: 100vh;
+}
+
+#main-container {
+    background: $surface;
+    layout: horizontal;
+    color: $foreground;
+}
+
+#package-table {
+    height: 1fr;
+    border: round $accent;
+    align: center middle;
+    scrollbar-gutter: stable;
+    content-align: left middle;
+}
+#package-table:focus {
+    border: round $primary;
+    background: $panel;
+}
+
+#package-details {
+    width: 60%;
+    height: 1fr;
+    border: round $accent;
+    padding: 1 1; /* top/bottom left/right */
+}
+#package-details:focus {
+    border: round $primary;
+    background: $panel;
+}        
+
+#search-container {
+    height: auto; /* Adjusted for Label and Input */
+    padding-bottom: 1;
+}
+#filter-status {
+    padding: 1 1 1 1; /* top right bottom left */
+    height: auto;
+    min-height: 1;
+}
+
+#modal-dialog-scrim {
+    width: 80%;
+    height: 80%;
+    align: center middle; /* Textual's way to center a single child */
+    /* Optional: background for dimming effect */
+}
+
+
+/* Styling for the actual visible dialog box for filters */
+#filter-modal-dialog {
+    width: auto;
+    max-width: 50%;
+    height: auto;
+    max-height: 80%;
+    border: round $primary;
+    background: $panel;
+    layout: vertical; /* To stack label, inputs, buttons */
+    overflow-y: auto;
+}
+
+/* Styling for the actual visible dialog box for sorting */
+#sort-modal-dialog {
+    width: auto;
+    max-width: 50%;
+    height: auto;
+    max-height: 70%;
+    border: round $primary;
+    background: $panel;
+    layout: vertical;
+    overflow-y: auto;
+}
+
+/* Titles within modals (no change needed here, just ensure IDs match) */
+#filter-title, #sort-title {
+    padding-bottom: 1;
+    content-align: center middle;
+    width: 1fr;
+    height: auto;
+}
+
+/* Inputs, Checkboxes, RadioSet in modals */
+#filter-modal-dialog Input, #filter-modal-dialog Checkbox {
+    margin-bottom: 1; /* Space between items */
+    width: 1fr;
+    height: auto;
+}
+#sort-modal-dialog RadioSet {
+    width: 1fr;
+    height: auto;
+    background: $panel;
+}
+#sort-modal-dialog RadioButton {
+    width: 1fr; /* Make radio buttons take full width for better touch/click */
+    height: auto;
+}
+
+/* Buttons container in modals */
+#filter-buttons, #sort-buttons {
+    padding-top: 1;
+    align-horizontal: center;
+}
+#filter-buttons Button, #sort-buttons Button {
+    width: auto;
+    height: auto;
+    align-horizontal: center;
+}

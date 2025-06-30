@@ -1,6 +1,6 @@
 [project]
 name = "aurdex"
-version = "0.0.3"
+version = "0.0.4"
 description = "terminal user interface for browsing AUR package metadata"
 authors = [{ name = "involution" }]
 license = { text = "Apache-2.0" }
@@ -18,7 +18,7 @@ git = ["pygit2"]
 alpm = ["pyalpm"]
 
 [project.scripts]
-aurdex = "aurdex:main"
+aurdex = "aurdex.cli:main"
 
 [build-system]
 requires = ["setuptools>=61"]

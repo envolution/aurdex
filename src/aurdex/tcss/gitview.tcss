@@ -1,0 +1,98 @@
+GitViewModal {
+    layout: vertical;
+    background: $surface;
+    width: 1fr;
+    height: 1fr;
+}
+
+#git-modal-title {
+    dock: top;
+    width: 100%;
+    text-align: center;
+    color: $secondary;
+    border: round $primary;
+}
+
+#git-status-label {
+    dock: top;
+    height: auto;
+    padding: 0 1;
+#    margin: 0 0 1 1;
+    content-align: center middle;
+    border: round $primary;
+    text-align: center;
+    min-height: 1;
+}
+
+#git-main-container {
+    layout: horizontal;
+    height: 1fr;
+#    padding-top: 1;
+}
+
+#git-left-pane {
+    layout: vertical;
+    width: 35%;
+#    padding-right: 1;
+    border-right: solid $primary-lighten-2;
+}
+
+#git-file-tree-container {
+    border: round $accent;
+    height: 50%;
+}
+#git-file-tree-container Label { width: 100%; text-align: center; padding-bottom: 1;}
+
+#git-file-tree {
+    height: 1fr;
+}
+
+#git-commit-history-container {
+    border: round $accent;
+    height: 1fr;
+#    padding: 1;
+}
+#git-commit-history-container Label {
+    width: 100%; 
+    text-align: center; 
+#    padding-bottom: 1;
+}
+
+
+#git-commit-history {
+    height: 1fr;
+    background: $panel;
+}
+
+#git-content-view-container {
+    width: 1fr;
+    height: 100%; /* Make it take full height of its allocated space in the horizontal layout */
+    layout: vertical; /* So that height: 1fr on its child works */
+#    padding: 0 1 0 2;
+}
+#git-content-view-container Label { 
+    width: 100%; 
+    text-align: center; 
+#    padding-bottom: 1;
+}
+
+#git-content-scroll-wrapper {
+    height: 1fr; /* Takes remaining space after the Label in git-content-view-container */
+    overflow-y: scroll; /* This container handles the scrolling */
+    background: $panel; /* Optional: move background here if desired */
+    border: round $accent; /* Optional: move border here if desired */
+}    
+
+#git-content-view { /* This should already be fine but for completeness */
+#    padding: 1;
+    width: 100%;
+}
+
+#git-close-button {
+    width: auto; /* Shrink to content */
+    min-width: 0;
+#    padding: 0 1; /* Less padding */
+    height: 1; /* Make it compact */
+    border-top: none; /* If it's in the footer, might not need top border */
+    dock: right; /* Example: tuck it into the corner of the footer */
+}

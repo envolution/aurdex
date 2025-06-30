@@ -1,0 +1,119 @@
+CommentsModal {
+    layout: vertical;
+    background: $panel;
+    width: 1fr;
+    height: 1fr;
+}
+
+#modal-title {
+    text-align: center;
+    width:1fr;
+    height: auto;
+    text-style: bold;
+    color: $secondary;
+    border: round $primary;
+}
+
+#comments-scroller {
+    /* Styles for the VerticalScroll containing comments */
+}
+
+#loading {
+    width: 1fr;
+    height: 1fr;
+    align: center middle;
+}
+#loading LoadingIndicator {
+    width: auto;
+    height: auto;
+}
+
+.comment-block.is-pinned-outer {
+}
+
+.pinned-content-wrapper {
+    layout: vertical;
+    background: $secondary;
+    border: round $success-darken-1;
+    padding: 1 1;
+    height: auto;
+}
+
+.comment-block {
+    border: round $accent;
+    background: $boost;
+    height: auto;
+    layout: vertical;
+    margin: 1 1 1 1;
+}
+
+#comment-header {
+    layout: horizontal;
+    content-align: left middle;
+    height:auto;
+    overflow: hidden auto; 
+}
+
+.comment-number {
+    color: $primary;
+    text-style: bold;
+    margin-right: 1;
+    margin-left: 1;
+    width:auto;
+}
+
+.comment-user {
+    color: $primary;
+    text-style: bold;
+    width:auto;
+    margin-right: 1;
+}
+
+.comment-date {
+    color: $accent-darken-1;
+    text-style: italic;
+    margin-right: 1;
+    width:auto;
+}
+
+.comment-edited {
+    color: $warning;
+    text-style: italic;
+    width:auto;
+    margin-right: 1;
+}
+.comment-pinned-label {
+    margin-left: 1;
+    width:auto;
+}
+
+.comment-paragraph {
+    height: auto;
+    margin: 1 1 1 1;
+    text-wrap: wrap;
+}
+.comment-paragraph Link { /* Targeting the styled Text objects */
+    text-style: underline;
+}
+
+.comment-code-block {
+    background: $background-darken-2;
+    padding: 1;
+    border: round $primary;
+    height: auto;
+    margin-top: 1;
+    overflow: auto;
+    text-wrap: nowrap;
+}
+
+.centered-text {
+    text-align: center;
+    margin: 1 0;
+    color: $text-muted;
+}
+
+.error-message {
+    color: $error;
+    text-align: center;
+    margin: 1 0;
+}

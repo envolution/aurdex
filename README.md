@@ -6,6 +6,7 @@
 - View detailed metadata, dependencies, and reverse dependencies
 - Explore package git repositories and commit history
 - View package comments from aurweb
+- Create and use profiles for customized views
 
 > **Note**: aurdex is **not** an AUR helper. It does **not** install or build packages.  
 > It’s designed for **viewing package information** and understanding dependency relationships.
@@ -15,11 +16,13 @@
 ![AUR_Package_Browser_2025-06-24T20_42_26_423139](https://github.com/user-attachments/assets/bece2564-7133-4436-a665-144311c83e29)
 
 # Installation
+
 The aurdex tool is available in the AUR (Arch User Repository).
 
 You can install it using an AUR helper such as yay, paru, or manually via git.
 
 ### Using an AUR helper (recommended)
+
 ```
 yay -S aurdex
 
@@ -27,8 +30,11 @@ or
 
 paru -S aurdex
 ```
+
 ### Manual installation
+
 Clone the package and build it with makepkg:
+
 ```
 git clone https://aur.archlinux.org/aurdex.git
 cd aurdex
