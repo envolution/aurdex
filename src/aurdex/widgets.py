@@ -411,11 +411,13 @@ class PackageDetails(VerticalScroll):
                             if providers:
                                 last_index = len(providers) - 1
                                 for i, provider_pkg_item in enumerate(providers):
+                                    source = provider_pkg_item.get("source")
+                                    if source == "local":
+                                        continue
+                                    name = provider_pkg_item.get("name")
                                     is_installed = (
-                                        provider_pkg_item.get("source") == "local"
-                                        or self.app.provide_db.installed_packages.get(
-                                            provider_pkg_item.get("name")
-                                        )
+                                        self.app.provide_db.installed_packages.get(name)
+                                        is not None
                                     )
                                     status_icon = (
                                         "[b $success]✔[/]" if is_installed else " "

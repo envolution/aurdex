@@ -2,7 +2,6 @@ import argparse
 import importlib.metadata
 import json
 import os
-import httpx
 from rich.console import Console
 from rich.table import Table
 from rich.text import Text
