@@ -299,6 +299,9 @@ class PackageDB:
         if not self.db_path.exists():
             rebuild_required = True
             LOGGER.info("Database file not found, full rebuild required.")
+            self.console.print(
+                "[bold yellow]Database not found. Performing initial build...[/bold yellow]"
+            )
         else:
             with self.connection() as conn:
                 try:
@@ -309,15 +312,20 @@ class PackageDB:
                         LOGGER.info(
                             f"Schema version mismatch (db: {ver}, required: {SCHEMA_VERSION}), full rebuild required."
                         )
+                        self.console.print(
+                            "[bold yellow]Database schema is outdated. Rebuilding...[/bold yellow]"
+                        )
                 except sqlite3.DatabaseError:
                     rebuild_required = True
                     LOGGER.warning(
                         "Database error while checking schema version, full rebuild required."
                     )
+                    self.console.print(
+                        "[bold red]Database is corrupted. Rebuilding...[/bold red]"
+                    )
+
         if rebuild_required:
-            self.rebuild(full=True)
-        else:
-            self.rebuild(full=False)
+            self.rebuild(full=True, download=True)
 
     def _download_aur_json(self) -> None:
         """Downloads the AUR JSON metadata file."""

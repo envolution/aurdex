@@ -79,7 +79,7 @@ def main():
 
     # --- Database Preparation ---
     db = PackageDB(console=console)
-    # db._ensure_database()
+    db._ensure_database()
 
     if args.deptree:
         resolver = DependencyResolver(db, console=console)
