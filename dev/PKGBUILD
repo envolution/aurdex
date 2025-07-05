@@ -27,6 +27,7 @@ sha256sums=('SKIP')
 
 build() {
   cd "$pkgname"
+  rm -rf dist
   python -m build --wheel --no-isolation
 }
 
