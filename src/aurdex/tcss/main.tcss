@@ -3,6 +3,34 @@ Screen {
     background: $background;
     height: 100vh;
 }
+CustomHeader {
+    dock: top;
+    width: 100%;
+    height: 1;
+    background: $panel;
+    layout: horizontal;
+    padding: 0 1;
+}
+#header-title-subtitle {
+    width: 1fr;
+    color: $foreground;
+    content-align-horizontal: center;
+}
+#header-age {
+    width: auto;
+    color: $accent;
+    content-align-horizontal: right;
+}
+
+#loading-indicator {
+    layer: above;
+    position: relative;
+    content-align: center middle;
+    width: 1fr;
+    height: 1fr;
+    dock: top;
+    background: rgba(0, 0, 0, 0.2);
+}
 
 #main-container {
     background: $surface;
@@ -26,7 +54,11 @@ Screen {
     width: 60%;
     height: 1fr;
     border: round $accent;
-    padding: 1 1; /* top/bottom left/right */
+    padding: 1 1;
+}
+#package-details-content {
+    text-wrap: nowrap;
+    width: 100; 
 }
 #package-details:focus {
     border: round $primary;

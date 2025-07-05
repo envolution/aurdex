@@ -1,11 +1,9 @@
 import os
 import appdirs
 import json
-import gzip
 import re
-import fnmatch
-import httpx
 import logging as log
+import time
 
 from typing import Optional, List, Dict, Any
 
@@ -17,18 +15,18 @@ from textual.logging import TextualHandler
 from textual.app import App, ComposeResult
 from textual.containers import Container, Vertical
 from textual.widgets import (
-    Header,
     Footer,
     Input,
     DataTable,
     Label,
     Checkbox,
+    LoadingIndicator,
 )
 
 from textual.coordinate import Coordinate
 
 
-from .db import ProvideDB
+from .db import PackageDB
 from .widgets import (
     FilterModal,
     SortModal,
@@ -36,6 +34,7 @@ from .widgets import (
     GitViewModal,
     CommentsModal,
     ProfileModal,
+    CustomHeader,
 )
 
 log.root.handlers.clear()
@@ -66,22 +65,26 @@ class aurdex(App):
     ]
 
     def __init__(
-        self, profile_name: Optional[str] = None, *args: Any, **kwargs: Any
+        self,
+        profile_name: Optional[str] = None,
+        db: Optional[PackageDB] = None,
+        *args: Any,
+        **kwargs: Any,
     ) -> None:
         super().__init__(*args, **kwargs)
         self.startup_profile = profile_name
-        self.packages: List[Dict[str, Any]] = []
+        self.provide_db = db or PackageDB()
         self.filtered_packages: List[Dict[str, Any]] = []
         self.displayed_packages: List[Dict[str, Any]] = []
-        self.current_sort = "sort-name"
-        self.current_sort_reverse = False
+        self.current_sort = "sort-popularity"
+        self.current_sort_reverse = True
         self.search_term = ""
         self.chunk_size = 1000
         self.loaded_count = 0
 
         self.config_path_dir = appdirs.user_config_dir(appname="aurdex")
         self.config_file = os.path.join(self.config_path_dir, "settings.json")
-        self.git_cache_path = appdirs.user_cache_dir(appname="aurdex")
+        self.cache_path_dir = appdirs.user_cache_dir(appname="aurdex")
 
         self.default_profile_name = "default"
         self.current_profile_name = "default"
@@ -92,16 +95,17 @@ class aurdex(App):
             "maintainer": "",
             "provides": "",
         }
-        self.filters = self.default_filters_structure.copy()  # Initialize self.filters
-        self._filter_modal: Optional[FilterModal] = None  # For type hinting
+        self.filters = self.default_filters_structure.copy()
+        self._filter_modal: Optional[FilterModal] = None
 
-        self.provide_db: Optional[ProvideDB] = None
         self._dep_resolve_timer: Optional[Timer] = None
-        self.DEP_RESOLVE_DELAY: float = 1.1  # seconds for delay before resolving deps
+        self.DEP_RESOLVE_DELAY: float = 1.1
+        self._search_timer: Optional[Timer] = None
+        self.SEARCH_DEBOUNCE_DELAY: float = 0.3
         self._last_input = None
 
     def compose(self) -> ComposeResult:
-        yield Header(show_clock=True)
+        yield CustomHeader()
         with Container(id="main-container"):
             with Vertical(id="left-pane", classes="column"):
                 with Container(id="search-container"):
@@ -113,40 +117,37 @@ class aurdex(App):
                 yield DataTable(id="package-table", cursor_type="row")
             yield PackageDetails(id="package-details")
         yield Footer()
+        yield LoadingIndicator(id="loading-indicator")
 
-    @work(exclusive=True, thread=True)
-    async def download_metadata(self):
-        url = "https://aur.manjaro.org/packages-meta-ext-v1.json.gz"
-        try:
-            async with httpx.AsyncClient(timeout=60.0, follow_redirects=True) as client:
-                resp = await client.get(url)
-                resp.raise_for_status()
-                with open(self.datafile, "wb") as fp:
-                    fp.write(resp.content)
+    def on_mount(self) -> None:
+        self.update_title()
+        self.query_one(CustomHeader).db_age = self.provide_db.db_age
+        table = self.query_one("#package-table", DataTable)
+        table.add_column("Name", key="name", width=None)
+        table.add_column("Version", width=12, key="version")
+        table.add_column("Votes", width=6, key="votes")
+        table.add_column("Pop.", width=6, key="popularity")
+        table.focus()
 
-            self.notify("Sync complete")
-            log.info(f"Download complete: {self.datafile}")
-            self._load_package_data()
-            self.action_refresh()
-        except Exception as e:
-            self.notify(f"Download failed: {e}", severity="error", timeout=10)
-            if not os.path.exists(self.datafile):
-                self.packages = []
-                self.filtered_packages = []
-                self.update_package_list()
+        self.query_one("#loading-indicator").display = False
+
+        os.makedirs(self.config_path_dir, exist_ok=True)
+        os.makedirs(self.cache_path_dir, exist_ok=True)
+
+        self.load_app_config()
+        self.query_one("#search-input", Input).value = self.search_term
+        self.action_refresh()
 
     def action_refresh(self) -> None:
-        self.filter_packages(self.search_term)  # Re-apply current search and filters
+        self.filter_packages()
         self.update_package_list()
         self.update_filter_status()
-        self.notify("Package list refreshed.")
 
     def action_reset_filters(self) -> None:
-        """Action to reset all filters to their default state."""
         self.filters = self.default_filters_structure.copy()
         self.search_term = ""
         self.query_one("#search-input", Input).value = ""
-        self.filter_packages("")
+        self.filter_packages()
         self.update_package_list()
         self.update_filter_status()
         self.notify("All filters have been reset.")
@@ -160,126 +161,91 @@ class aurdex(App):
     def track_click(self, event: MouseDown) -> None:
         self._last_input = "mouse"
 
-    def _load_package_data(self):
-        try:
-            with gzip.open(self.datafile, "rt", encoding="utf-8") as f:
-                self.packages = json.load(f)
-
-            if self.provide_db is None:
-                self.provide_db = ProvideDB(aur_data=self.packages)
-            else:
-                self.provide_db.refresh(aur_data=self.packages)
-
-            self.filtered_packages = self.packages.copy()
-            self.notify(
-                f"Loaded {len(self.packages)} packages.", severity="information"
-            )
-            self.sort_packages()
-        except Exception as e:
-            self.packages = []
-            self.filtered_packages = []
-            self.notify(
-                f"Error loading package data: {e}", severity="error", timeout=10
-            )
-
-    def load_aur_packages(self, force_download: bool = False) -> None:
-        os.makedirs(self.config_path_dir, exist_ok=True)
-        self.datafile = os.path.join(
-            self.config_path_dir, "packages-meta-ext-v1.json.gz"
-        )
-
-        if not os.path.exists(self.datafile) or force_download:
-            self.notify("Syncing AUR metadata")
-            log.info(f"Syncing AUR metadata to {self.datafile}")
-            self.download_metadata()
-            return
-
-        self._load_package_data()
-
     @work(exclusive=True, thread=True)
-    async def resolve_package_dependencies(self, package_data: Dict[str, Any]) -> None:
-        """
-        Worker thread to resolve dependencies for a given package and update details pane.
-        """
-        if not self.provide_db or not package_data:
-            log.warning("resolve_package_dependencies: No provide_db or package_data.")
+    async def resolve_package_dependencies(self, package_name: str) -> None:
+        if not self.provide_db or not package_name:
+            log.warning("resolve_package_dependencies: No provide_db or package_name.")
             return
 
-        log.debug(f"Resolving dependencies for: {package_data.get('Name')}")
         details_pane = self.query_one("#package-details", PackageDetails)
+        original_package_data = details_pane.package_data
+        if (
+            not original_package_data
+            or original_package_data.get("name") != package_name
+        ):
+            return
+
+        enriched_package_data = original_package_data.copy()
+
+        aur_details = self.provide_db.package_info(name=package_name, source="aur")
+        if aur_details:
+            for key in ["Depends", "MakeDepends", "CheckDepends", "OptDepends"]:
+                if aur_details.get(key):
+                    enriched_package_data[key] = aur_details[key]
+
+        log.debug(f"Resolving dependencies for: {package_name}")
 
         enriched_deps: Dict[str, List[Dict]] = {}
         dep_types_to_process = {
-            "Depends": package_data.get("Depends", []),
-            "MakeDepends": package_data.get("MakeDepends", []),
-            "CheckDepends": package_data.get("CheckDepends", []),
-            "OptDepends": package_data.get("OptDepends", []),
+            "Depends": enriched_package_data.get("Depends", []),
+            "MakeDepends": enriched_package_data.get("MakeDepends", []),
+            "CheckDepends": enriched_package_data.get("CheckDepends", []),
+            "OptDepends": enriched_package_data.get("OptDepends", []),
         }
 
         for dep_type_key, dep_list_from_pkg in dep_types_to_process.items():
             enriched_deps[dep_type_key] = []
+            if not dep_list_from_pkg:
+                continue
             for dep_item_full_spec in dep_list_from_pkg:
-                # Parse the dependency string (e.g., "libfoo>=1.0" or "bash: for building")
-                # Cleaned name for ProvideDB lookup:
-                cleaned_dep_name = (
-                    dep_item_full_spec.split(":")[0]
-                    .split("=")[0]
-                    .split("<")[0]
-                    .split(">")[0]
-                    .strip()
-                )
-                # Optional description (primarily for OptDepends):
+                # Separate the spec from the description (e.g., "bash: for building")
+                dep_spec = dep_item_full_spec.split(":")[0].strip()
                 dep_description = (
                     dep_item_full_spec.split(":", 1)[1].strip()
                     if ":" in dep_item_full_spec
                     else None
                 )
 
-                providers = self.provide_db.find_providers(cleaned_dep_name)
+                # First, find packages that explicitly provide the exact dependency spec
+                all_providers = [
+                    self.provide_db.package_info(p[0], p[1])
+                    for p in self.provide_db.search_by_provides(dep_spec)
+                ]
+
+                # Also, check for a package with the "bare" name of the dependency
+                bare_name = re.split(r"[<>=]", dep_spec)[0].strip()
+                direct_match_pkg = self.provide_db.package_info(bare_name)
+                if direct_match_pkg:
+                    # Avoid adding a duplicate if it was already found via provides
+                    if not any(
+                        p
+                        and p["name"] == direct_match_pkg["name"]
+                        and p["source"] == direct_match_pkg["source"]
+                        for p in all_providers
+                    ):
+                        all_providers.append(direct_match_pkg)
+
+                # Filter out any None results and assign to the final list
+                providers = [p for p in all_providers if p]
+
+                # Sort providers to show official repos before AUR
+                providers.sort(key=lambda p: (p.get("source") == "aur", p.get("name")))
+
                 enriched_deps[dep_type_key].append(
                     {
-                        "name": cleaned_dep_name,  # The name used for lookup
-                        "original_spec": dep_item_full_spec,  # The full string from JSON
-                        "description": dep_description,  # Description if any
-                        "providers": providers,  # List of provider dicts from ProvideDB
+                        "name": bare_name,  # Use the bare name for the key
+                        "original_spec": dep_item_full_spec,
+                        "description": dep_description,
+                        "providers": providers,
                     }
                 )
 
-        # Update the PackageDetails widget from the main thread
         self.call_from_thread(
             details_pane.update_package,
-            package=package_data,  # Pass the original package data
-            enriched_dependencies=enriched_deps,  # Pass the newly resolved data
+            package=enriched_package_data,
+            enriched_dependencies=enriched_deps,
         )
-        log.debug(f"Finished resolving dependencies for: {package_data.get('Name')}")
-
-    def on_mount(self) -> None:
-        self.update_title()
-        self.sub_title = "Browse Arch User Repository packages"
-
-        table = self.query_one("#package-table", DataTable)
-        table.add_column(
-            "Name", key="name"
-        )  # Give keys for sorting if needed by DataTable itself
-        table.add_column("Version", width=12, key="version")
-        table.add_column("Votes", width=6, key="votes")
-        table.add_column("Pop.", width=6, key="popularity")
-        table.focus()
-
-        os.makedirs(self.config_path_dir, exist_ok=True)
-        os.makedirs(self.git_cache_path, exist_ok=True)
-
-        self.load_app_config()
-        self.query_one("#search-input", Input).value = self.search_term
-        self.load_aur_packages()
-
-        # Apply filters and search term (if any from previous session, though not saved currently)
-        self.filter_packages(self.search_term)
-        self.update_package_list()  # Populate table
-        self.update_filter_status()
-        self.query_one(
-            "#package-table", DataTable
-        ).focus()  # Focus package table on startup
+        log.debug(f"Finished resolving dependencies for: {package_name}")
 
     def action_search(self) -> None:
         self.query_one("#search-input", Input).focus()
@@ -287,7 +253,8 @@ class aurdex(App):
     def action_clear_search(self) -> None:
         search_input = self.query_one("#search-input", Input)
         search_input.value = ""
-        self.filter_packages("")
+        self.search_term = ""
+        self.filter_packages()
         self.update_package_list()
         self.update_filter_status()
         self.query_one("#package-table", DataTable).focus()
@@ -324,7 +291,7 @@ class aurdex(App):
         self.theme = profile_data.get("theme", "nord")
         self.query_one("#search-input", Input).value = self.search_term
         self.update_title()
-        self.filter_packages(self.search_term)
+        self.filter_packages()
         self.update_package_list()
         self.update_filter_status()
 
@@ -338,88 +305,45 @@ class aurdex(App):
         }
 
     def update_title(self):
-        if self.current_profile_name == "default":
-            self.title = "aurdex"
-        else:
+        self.title = "aurdex"
+        if self.current_profile_name != "default":
             self.title = f"Profile: {self.current_profile_name} - aurdex"
 
-        self.sub_title = "Browsing the AUR"
         if self.loaded_count:
-            self.sub_title = (
-                self.sub_title
-                + f" - showing ({self.loaded_count}/{len(self.packages)}) packages"
-            )
+            self.sub_title = f" - showing ({self.loaded_count}/{len(self.filtered_packages)}) packages"
+        self.query_one(CustomHeader).refresh_header_text()
 
-    def filter_packages(self, search_term: str) -> None:
-        self.search_term = search_term.lower()
-        current_packages = self.packages  # Start with all packages
+    @work(exclusive=True, thread=True)
+    def search_packages_worker(self) -> None:
+        """Perform package search in a background thread."""
+        sort_key_map = {
+            "sort-name": "name",
+            "sort-first": "first_submitted",
+            "sort-last": "last_modified",
+            "sort-votes": "num_votes",
+            "sort-popularity": "popularity",
+        }
+        sort_by = sort_key_map.get(self.current_sort, "popularity")
 
-        # Apply text search first if present
-        if self.search_term:
-            temp_filtered = []
+        results = self.provide_db.search(
+            search_term=self.search_term,
+            filters=self.filters,
+            sort_by=sort_by,
+            sort_reverse=self.current_sort_reverse,
+            limit=200000,
+        )
+        self.call_from_thread(self.update_search_results, results)
 
-            # Check if it looks like a regex pattern (contains regex special chars)
-            is_regex = any(char in self.search_term for char in r"[]{}()+^$|\\")
+    def update_search_results(self, packages: List[Dict[str, Any]]) -> None:
+        """Update the UI with the new search results."""
+        self.filtered_packages = packages
+        self.reset_display()
+        self.update_package_list()
+        self.update_filter_status()
 
-            for pkg in current_packages:
-                # Build searchable text from Name and Keywords only
-                name = str(pkg.get("Name", "")).lower()
-                keywords = " ".join(pkg.get("Keywords", [])).lower()
-                searchable_text = f"{name} {keywords}".strip()
-
-                if is_regex:
-                    try:
-                        # Try regex search
-                        if re.search(self.search_term, searchable_text, re.IGNORECASE):
-                            temp_filtered.append(pkg)
-                    except re.error:
-                        # Fall back to wildcard if regex is invalid
-                        if fnmatch.fnmatch(searchable_text, f"*{self.search_term}*"):
-                            temp_filtered.append(pkg)
-                else:
-                    # Use wildcard matching (supports * and ?)
-                    if fnmatch.fnmatch(searchable_text, f"*{self.search_term}*"):
-                        temp_filtered.append(pkg)
-
-            current_packages = temp_filtered
-
-        # Apply checkbox/input filters
-        active_filter_criteria = []
-        if self.filters.get("abandoned"):
-            active_filter_criteria.append(lambda pkg: pkg.get("Maintainer") is None)
-        if self.filters.get("out_of_date"):
-            active_filter_criteria.append(
-                lambda pkg: pkg.get("OutOfDate") is not None
-            )  # OutOfDate stores timestamp if OOD
-
-        maintainer_filter = self.filters.get("maintainer", "").lower()
-        if maintainer_filter:
-            active_filter_criteria.append(
-                lambda pkg: maintainer_filter in str(pkg.get("Maintainer", "")).lower()
-                or any(
-                    maintainer_filter in str(cm).lower()
-                    for cm in pkg.get("CoMaintainers", [])
-                    if cm
-                )
-            )
-
-        provides_filter = self.filters.get("provides", "").lower()
-        if provides_filter:
-            active_filter_criteria.append(
-                lambda pkg: provides_filter in " ".join(pkg.get("Provides", [])).lower()
-            )
-
-        if active_filter_criteria:
-            self.filtered_packages = [
-                pkg
-                for pkg in current_packages
-                if all(criterion(pkg) for criterion in active_filter_criteria)
-            ]
-        else:  # If only search term was applied or no filters at all
-            self.filtered_packages = current_packages
-
-        self.sort_packages()  # Sort the newly filtered list
-        self.reset_display()  # Reset display to show from the top of the new list
+    def filter_packages(self) -> None:
+        """Trigger the background search worker."""
+        self.search_packages_worker()
 
     def load_more_packages(self) -> bool:
         if self.loaded_count >= len(self.filtered_packages):
@@ -437,32 +361,24 @@ class aurdex(App):
         table = self.query_one("#package-table", DataTable)
         if table.cursor_row >= len(
             self.displayed_packages
-        ) - 20 and self.loaded_count < len(
-            self.filtered_packages
-        ):  # Load if within 20 rows of end
+        ) - 20 and self.loaded_count < len(self.filtered_packages):
             if self.load_more_packages():
-                current_cursor_row = table.cursor_row  # Preserve cursor
+                current_cursor_row = table.cursor_row
 
-                # Add new rows to table efficiently
-                table_row_count = (
-                    table.row_count
-                )  # This is the index where new rows will start
-                new_packages_chunk = self.displayed_packages[
-                    table_row_count:
-                ]  # Get only the newly loaded packages
+                table_row_count = table.row_count
+                new_packages_chunk = self.displayed_packages[table_row_count:]
 
-                for package in new_packages_chunk:  # Iterate through the new packages
+                for package in new_packages_chunk:
+                    key = f"{package['name']}:{package['source']}"
                     table.add_row(
-                        package.get("Name", "Unknown"),
-                        package.get("Version", "Unknown"),
-                        str(package.get("NumVotes", 0)),
-                        f"{package.get('Popularity', 0):.2f}",
-                        key=str(package.get("ID", 0)),  # Add key here for each row
+                        package.get("name", "Unknown"),
+                        package.get("version", "Unknown"),
+                        str(package.get("num_votes", 0)),
+                        f"{package.get('popularity', 0):.2f}",
+                        key=key,
                     )
 
-                if (
-                    current_cursor_row < table.row_count
-                ):  # Restore cursor if still valid
+                if current_cursor_row < table.row_count:
                     table.cursor_coordinate = Coordinate(
                         current_cursor_row, table.cursor_column
                     )
@@ -471,7 +387,7 @@ class aurdex(App):
     def reset_display(self) -> None:
         self.displayed_packages = []
         self.loaded_count = 0
-        self.load_more_packages()  # Load the first chunk
+        self.load_more_packages()
         self.update_title()
 
     def update_package_list(self) -> None:
@@ -490,15 +406,20 @@ class aurdex(App):
         found_old_cursor = False
 
         for i, package in enumerate(self.displayed_packages):
-            package_id_str = str(package.get("ID", 0))
+            key = f"{package['name']}:{package['source']}"
             table.add_row(
-                package.get("Name", "Unknown"),
-                package.get("Version", "Unknown"),
-                str(package.get("NumVotes", 0)),
-                f"{package.get('Popularity', 0):.2f}",  # Adjusted formatting
-                key=package_id_str,
+                "/".join(
+                    [
+                        f"[dim]{package.get('source', '?')}",
+                        f"[/dim][b]{package.get('name', 'Unknown')}[/]",
+                    ]
+                ),
+                package.get("version", "Unknown"),
+                str(package.get("num_votes", 0)),
+                f"{package.get('popularity', 0):.2f}",
+                key=key,
             )
-            if package_id_str == current_cursor_key:
+            if key == current_cursor_key:
                 new_cursor_row_index = i
                 found_old_cursor = True
 
@@ -511,6 +432,7 @@ class aurdex(App):
             table.cursor_coordinate = Coordinate(
                 row=0, column=table.cursor_coordinate.column
             )
+        self.update_title()
 
     def update_filter_status(self) -> None:
         active_filters = []
@@ -531,35 +453,12 @@ class aurdex(App):
         else:
             status_label.update("No active filters.")
 
-    def sort_packages(self) -> None:
-        key_map = {
-            "sort-name": "Name",
-            "sort-first": "FirstSubmitted",
-            "sort-last": "LastModified",
-            "sort-votes": "NumVotes",
-            "sort-popularity": "Popularity",
-        }
-        sort_key = key_map.get(self.current_sort, "Name")
-
-        # Handle numerical and string sorting appropriately
-        if sort_key in ["NumVotes", "Popularity", "FirstSubmitted", "LastModified"]:
-            self.filtered_packages.sort(
-                key=lambda p: p.get(sort_key, 0), reverse=self.current_sort_reverse
-            )
-        else:  # Default to string sorting for Name, etc.
-            self.filtered_packages.sort(
-                key=lambda p: str(p.get(sort_key, "")).lower(),
-                reverse=self.current_sort_reverse,
-            )
-
     def action_sort(self) -> None:
         def on_sort_modal_closed(result: Optional[Dict[str, Any]]) -> None:
             if result:
                 self.current_sort = result["sort_key"]
                 self.current_sort_reverse = result["reverse"]
-                self.sort_packages()
-                self.reset_display()
-                self.update_package_list()
+                self.filter_packages()
 
         self.push_screen(
             SortModal(
@@ -587,7 +486,7 @@ class aurdex(App):
                         "#filter-provides", Input
                     ).value
 
-                    self.filter_packages(self.query_one("#search-input", Input).value)
+                    self.filter_packages()
                     self.update_package_list()
                     self.update_filter_status()
 
@@ -604,17 +503,45 @@ class aurdex(App):
         if table.row_count > 0:
             try:
                 row_key, _ = table.coordinate_to_cell_key(table.cursor_coordinate)
-                package_id = row_key.value
-                package = next(
-                    (p for p in self.packages if str(p.get("ID")) == package_id), None
-                )
+                name, source = row_key.value.split(":")
+                package = self.provide_db.package_info(name=name, source=source)
                 if package:
                     self.push_screen(CommentsModal(package_data=package))
             except Exception:
                 pass
 
+    @work(exclusive=True, thread=True)
     def action_download_from_aur(self) -> None:
-        self.load_aur_packages(force_download=True)
+        """Worker thread to rebuild the database."""
+        self.call_from_thread(
+            setattr, self.query_one("#loading-indicator"), "display", True
+        )
+        start_time = time.time()
+        try:
+            # We trigger a non-full rebuild, but with a fresh download.
+            updated_count = self.provide_db.rebuild(full=False, download=True)
+            end_time = time.time()
+            elapsed = end_time - start_time
+            self.call_from_thread(
+                self.notify,
+                f"Database update completed in {elapsed:.2f}s. {updated_count} packages updated.",
+            )
+            self.call_from_thread(
+                setattr,
+                self.query_one(CustomHeader),
+                "db_age",
+                self.provide_db.db_age,
+            )
+            self.call_from_thread(self.action_refresh)
+        except Exception as e:
+            log.error(f"Error rebuilding database: {e}")
+            self.call_from_thread(
+                self.notify, f"Error updating database: {e}", severity="error"
+            )
+        finally:
+            self.call_from_thread(
+                setattr, self.query_one("#loading-indicator"), "display", False
+            )
 
     def action_profiles(self) -> None:
         def on_profile_modal_closed(result: Optional[Dict[str, Any]]) -> None:
@@ -638,7 +565,6 @@ class aurdex(App):
                         "default_profile", self.default_profile_name
                     )
 
-                    # If the current profile was deleted, load the default
                     if self.current_profile_name not in self.profiles:
                         self.load_profile(
                             self.default_profile_name,
@@ -663,10 +589,11 @@ class aurdex(App):
         if self._dep_resolve_timer:
             self._dep_resolve_timer.stop()
 
-        package_id = event.row_key.value
-        package = next(
-            (p for p in self.packages if str(p.get("ID")) == package_id), None
-        )
+        if not event.row_key.value:
+            return
+
+        name, source = event.row_key.value.split(":")
+        package = self.provide_db.package_info(name=name, source=source)
 
         if package:
             details_pane = self.query_one("#package-details", PackageDetails)
@@ -674,28 +601,47 @@ class aurdex(App):
 
             self._dep_resolve_timer = self.set_timer(
                 self.DEP_RESOLVE_DELAY,
-                lambda: self.resolve_package_dependencies(package),
+                lambda: self.resolve_package_dependencies(name),
             )
 
     @on(DataTable.RowSelected, "#package-table")
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
-        package_id = event.row_key.value
-        package = next(
-            (p for p in self.packages if str(p.get("ID")) == package_id), None
-        )
-        if package:
-            # Automatically open GitViewModal on row selection
-            self.push_screen(
-                GitViewModal(package_data=package, cache_base_path=self.git_cache_path)
-            )
+        if not event.row_key.value:
+            return
+        name, source = event.row_key.value.split(":")
+        package = self.provide_db.package_info(name=name, source=source)
+        if self._last_input == "keyboard":
+            if package:
+                if package.get("source") == "aur":
+                    if package.get("PackageBase"):
+                        self.push_screen(
+                            GitViewModal(
+                                package_data=package,
+                                cache_base_path=self.cache_path_dir,
+                            )
+                        )
+                    else:
+                        self.notify(
+                            "Error: PackageBase missing for this AUR package.",
+                            severity="error",
+                        )
+                else:
+                    self.notify(
+                        "Git view is only available for AUR packages.",
+                        severity="warning",
+                    )
 
     @on(Input.Changed, "#search-input")
     def on_input_changed(self, event: Input.Changed) -> None:
-        self.filter_packages(event.value)
-        self.update_package_list()
+        """Debounce the search input."""
+        self.search_term = event.value
+        if self._search_timer:
+            self._search_timer.stop()
+        self._search_timer = self.set_timer(
+            self.SEARCH_DEBOUNCE_DELAY, self.filter_packages
+        )
 
     def save_app_config(self):
-        """Saves the current application configuration to a file."""
         config_to_save = {
             "default_profile": self.default_profile_name,
             "profiles": self.profiles,
@@ -709,17 +655,14 @@ class aurdex(App):
             self.notify(f"Failed to save configuration: {e}", severity="error")
 
     def save_current_profile(self):
-        """Saves the current profile settings."""
         self.profiles[self.current_profile_name] = self.get_current_settings()
         self.save_app_config()
 
     @on(Input.Submitted, "#search-input")
     def on_input_submitted(self, event: Input.Submitted) -> None:
-        self.filter_packages(event.value)
-        self.update_package_list()
+        self.search_term = event.value
+        self.filter_packages()
         self.query_one("#package-table", DataTable).focus()
-
-        # --------------- Hotkeys/VIM-like navigation ------
 
     def action_cursor_down(self) -> None:
         if isinstance(self.focused, DataTable):
@@ -738,31 +681,23 @@ class aurdex(App):
             table = self.query_one("#package-table", DataTable)
             if table.row_count > 0:
                 table.move_cursor(row=0)
-                # table.move_cursor(row=0, column=table.cursor_column)
         if isinstance(self.focused, PackageDetails):
             self.focused.action_scroll_home()
 
-    def action_cursor_bottom(self) -> None:  # Bound to 'G'
+    def action_cursor_bottom(self) -> None:
         if isinstance(self.focused, DataTable):
             table = self.query_one("#package-table", DataTable)
-            # Load all packages before going to bottom
             while self.load_more_packages():
-                pass  # Keep loading until all are in self.displayed_packages
-
-            # After all are loaded, update table fully if new ones were added
-            # This check_load_more might have added some, but update_package_list ensures all displayed are in table
-            self.update_package_list()  # This will rebuild the table with all items
-
+                pass
+            self.update_package_list()
             if table.row_count > 0:
                 table.move_cursor(row=table.row_count - 1)
-                # table.move_cursor(row=table.row_count - 1, column=table.cursor_column)
             self.update_title()
         if isinstance(self.focused, PackageDetails):
             self.focused.action_scroll_end()
 
     def action_page_down(self) -> None:
         self.query_one("#package-table", DataTable).action_page_down()
-        # self.check_load_more() # Handled by RowHighlighted
 
     def action_page_up(self) -> None:
         self.query_one("#package-table", DataTable).action_page_up()
