@@ -3,7 +3,7 @@ name = "aurdex"
 version = "0.0.7"
 description = "terminal user interface for browsing AUR package metadata"
 authors = [{ name = "involution" }]
-license = { text = "Apache-2.0" }
+license = "Apache-2.0"
 readme = "README.md"
 requires-python = ">=3.9"
 dependencies = [
