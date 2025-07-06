@@ -26,7 +26,7 @@ except ModuleNotFoundError:
     _HAVE_PYALPM = False
 
 LOGGER = logging.getLogger(__name__)
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 APP_NAME = "aurdex"
 AUR_JSON = Path(user_cache_dir(APP_NAME)) / "packages-meta-ext-v1.json.gz"
 AUR_DB_URL = "https://aur.manjaro.org/packages-meta-ext-v1.json.gz"
@@ -121,6 +121,9 @@ def regexp(expr, item):
     return reg.search(item) is not None
 
 
+import time
+
+
 class PackageDB:
     """Unified AUR / repo package cache."""
 
@@ -139,6 +142,7 @@ class PackageDB:
         if self.db_path.exists():
             self.db_age = self.db_path.stat().st_mtime
         self.installed_packages = self._get_installed_packages()
+        self._pyalpm_handle = None
 
     def _get_installed_packages(self) -> Dict[str, str]:
         if not _HAVE_PYALPM:
@@ -168,25 +172,55 @@ class PackageDB:
                 conn.close()
 
     def get_package_dependencies(self, pkg_name: str) -> List[str]:
-        pkg_info = self.package_info(pkg_name, source="aur")
-        if not pkg_info:
-            pkg_info = self.package_info(pkg_name)
-        if not pkg_info:
-            return []
-        deps = pkg_info.get("Depends", [])
-        return [re.split(r"[<>=]", d)[0].strip() for d in deps]
+        """Get dependencies for a single package, optimized."""
+        query = """
+            SELECT l.target
+            FROM links l
+            WHERE l.name = ?
+              AND l.link_type = 'Depends'
+              AND (l.source = 'aur' OR l.source IN (SELECT source FROM packages WHERE name = ? AND source != 'aur'))
+            ORDER BY l.source != 'aur' -- Prioritize AUR
+        """
+        with self.connection() as conn:
+            results = conn.execute(query, (pkg_name, pkg_name)).fetchall()
+        return [re.split(r"[<>=]", row[0])[0].strip().split(":", 1)[0] for row in results]
+
+    def get_packages_dependencies(self, pkg_names: List[str]) -> Dict[str, List[str]]:
+        """Get dependencies for a list of packages in a batch."""
+        if not pkg_names:
+            return {}
+
+        placeholders = ",".join("?" for _ in pkg_names)
+        query = f"""
+            SELECT p.name, l.target
+            FROM packages p
+            JOIN links l ON p.name = l.name AND p.source = l.source
+            WHERE p.name IN ({placeholders}) AND l.link_type = 'Depends'
+            ORDER BY p.name
+        """
+        with self.connection() as conn:
+            results = conn.execute(query, pkg_names).fetchall()
+
+        deps_map: Dict[str, List[str]] = {name: [] for name in pkg_names}
+        for row in results:
+            pkg_name, dep_target = row
+            dep_name = re.split(r"[<>=]", dep_target)[0].strip().split(":", 1)[0]
+            if pkg_name in deps_map:
+                deps_map[pkg_name].append(dep_name)
+
+        return deps_map
 
     def search_by_provides(self, token: str) -> List[Tuple[str, str]]:
         """Return (name, source) where token ∈ Provides."""
         # Normalize the token by removing version constraints
-        base_token = re.split(r"[<>=]", token)[0].strip()
+        base_token = re.split(r"[<>=]", token)[0].strip().split(":", 1)[0]
         q = "SELECT name, source FROM links WHERE link_type = 'Provides' AND (target = ? OR target LIKE ?)"
         with self.connection() as c:
             return c.execute(q, (base_token, f"{base_token}=%")).fetchall()
 
     def search_by_depends(self, token: str) -> List[Tuple[str, str, str]]:
         """Return (name, source, type) where token ∈ any dependency type (Depends, MakeDepends, etc.)."""
-        base_token = re.split(r"[<>=]", token)[0].strip()
+        base_token = re.split(r"[<>=]", token)[0].strip().split(":", 1)[0]
         q = """
         SELECT name, source, link_type
         FROM links
@@ -293,6 +327,11 @@ class PackageDB:
                 operator = "REGEXP" if self._is_regex(value) else "="
                 where_clauses.append(f"p.{key} {operator} ?")
                 params.append(value)
+            elif key == "repos" and isinstance(value, list) and value:
+                placeholders = ",".join("?" for _ in value)
+                where_clauses.append(f"p.source IN ({placeholders})")
+                params.extend(value)
+
         if joins:
             query += " " + " ".join(list(dict.fromkeys(joins)))
         if where_clauses:
@@ -441,11 +480,80 @@ class PackageDB:
         LOGGER.info("Performing full database rebuild...")
         return self._rebuild(conn)
 
+    def _get_pyalpm_handle(self):
+        if self._pyalpm_handle is None:
+            handle = pyalpm.Handle("/", "/var/lib/pacman")
+            repo_regex = re.compile(r"^\[(.+)\]$")
+            try:
+                with open("/etc/pacman.conf", "r") as f:
+                    for line in f:
+                        if match := repo_regex.match(line.strip()):
+                            repo_name = match.group(1)
+                            if repo_name.lower() != "options":
+                                handle.register_syncdb(
+                                    repo_name, pyalpm.SIG_DATABASE_OPTIONAL
+                                )
+            except FileNotFoundError:
+                LOGGER.error("/etc/pacman.conf not found. Cannot register sync repos.")
+            except pyalpm.error as e:
+                LOGGER.error(f"Error registering sync repos: {e}")
+            self._pyalpm_handle = handle
+        return self._pyalpm_handle
+
+    def _update_repo_incrementally(self, conn: sqlite3.Connection) -> None:
+        if not _HAVE_PYALPM:
+            return
+
+        LOGGER.info("Performing incremental repo update...")
+
+        # --- Step 1: Get CURRENT state from pyalpm (Sync Repos + Local DB) ---
+        current_system_packages, pkg_lookup = self._get_current_system_packages()
+
+        # --- Step 2: Get STORED state from our database ---
+        stored_system_packages = {
+            tuple(row)
+            for row in conn.execute(
+                "SELECT name, version, source FROM packages WHERE source != 'aur'"
+            )
+        }
+
+        # --- Step 3: Find the deltas ---
+        packages_to_add_or_update = current_system_packages - stored_system_packages
+        packages_to_delete = stored_system_packages - current_system_packages
+
+        # --- Step 4: Act on deltas ---
+        cur = conn.cursor()
+
+        if packages_to_delete:
+            LOGGER.info(
+                f"Deleting {len(packages_to_delete)} obsolete repo/local packages."
+            )
+            cur.executemany(
+                "DELETE FROM packages WHERE name = ? AND version = ? AND source = ?",
+                list(packages_to_delete),
+            )
+
+        if packages_to_add_or_update:
+            LOGGER.info(
+                f"Adding/updating {len(packages_to_add_or_update)} repo/local packages."
+            )
+            for name, version, source in packages_to_add_or_update:
+                pkg_obj, source_name = pkg_lookup.get((name, version, source))
+                if pkg_obj:
+                    self._insert_repo_pkg(cur, pkg_obj, source_name)
+
+        LOGGER.info("Incremental repo update finished.")
+
     def _update_database(self, conn: sqlite3.Connection) -> int:
         LOGGER.info("Performing incremental database update...")
+        conn.execute(
+            "INSERT OR REPLACE INTO db_metadata (key, value) VALUES ('build_status', 'pending')"
+        )
         aur_updated_count = self._ingest_aur(conn)
-        if aur_updated_count > 0:
-            self._ingest_repo(conn)
+        self._update_repo_incrementally(conn)
+        conn.execute(
+            "UPDATE db_metadata SET value = 'complete' WHERE key = 'build_status'"
+        )
         conn.commit()
         LOGGER.info("Incremental update finished.")
         return aur_updated_count
@@ -518,38 +626,44 @@ class PackageDB:
         )
         return updated_count
 
+    def _get_current_system_packages(self) -> Tuple[set, dict]:
+        handle = self._get_pyalpm_handle()
+
+        current_system_packages = set()
+        pkg_lookup = {}
+
+        # Get all packages from sync repos first, as they take precedence
+        repo_pkgs = {}
+        for db in handle.get_syncdbs():
+            for pkg in db.pkgcache:
+                repo_pkgs[pkg.name] = (pkg, db.name)
+                key = (pkg.name, str(pkg.version), db.name)
+                current_system_packages.add(key)
+                pkg_lookup[key] = (pkg, db.name)
+
+        # Add any packages from the local db that were not in a sync repo
+        localdb = handle.get_localdb()
+        for pkg in localdb.pkgcache:
+            if pkg.name not in repo_pkgs:
+                key = (pkg.name, str(pkg.version), "local")
+                current_system_packages.add(key)
+                pkg_lookup[key] = (pkg, "local")
+
+        return current_system_packages, pkg_lookup
+
     def _ingest_repo(self, conn: sqlite3.Connection) -> None:
         if not _HAVE_PYALPM:
             LOGGER.info("pyalpm not available; skipping repo ingest.")
             return
-        import pyalpm
-        import re
 
-        handle = pyalpm.Handle("/", "/var/lib/pacman")
-        repo_regex = re.compile(r"^\[(.+)\]$")
-        try:
-            with open("/etc/pacman.conf", "r") as f:
-                for line in f:
-                    if match := repo_regex.match(line.strip()):
-                        repo_name = match.group(1)
-                        if repo_name.lower() != "options":
-                            handle.register_syncdb(
-                                repo_name, pyalpm.SIG_DATABASE_OPTIONAL
-                            )
-        except FileNotFoundError:
-            LOGGER.error("/etc/pacman.conf not found. Cannot register sync repos.")
-            return
-        except pyalpm.error as e:
-            LOGGER.error(f"Error registering sync repos: {e}")
-            return
         cur = conn.cursor()
-        local_pkgs = {p.name: p for p in handle.get_localdb().pkgcache}
-        for db in handle.get_syncdbs():
-            for pkg in db.pkgcache:
-                pkg_to_insert = local_pkgs.pop(pkg.name, pkg)
-                self._insert_repo_pkg(cur, pkg_to_insert, db.name)
-        for name, pkg in local_pkgs.items():
-            self._insert_repo_pkg(cur, pkg, "local")
+        current_system_packages, pkg_lookup = self._get_current_system_packages()
+
+        for name, version, source in current_system_packages:
+            pkg_obj, source_name = pkg_lookup.get((name, version, source))
+            if pkg_obj:
+                self._insert_repo_pkg(cur, pkg_obj, source_name)
+
         LOGGER.info("Repo packages ingested.")
 
     def _insert_package_row(
@@ -632,8 +746,8 @@ class PackageDB:
             """INSERT INTO packages (
             name, version, description, url, filename, packager, arch, build_date,
             install_date, isize, size, md5sum, sha256sum, base64_sig,
-            has_scriptlet, source, metadata)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            has_scriptlet, source, metadata, last_modified, maintainer)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             ON CONFLICT(name, source) DO UPDATE SET
                 version=excluded.version,
                 description=excluded.description,
@@ -649,10 +763,12 @@ class PackageDB:
                 sha256sum=excluded.sha256sum,
                 base64_sig=excluded.base64_sig,
                 has_scriptlet=excluded.has_scriptlet,
-                metadata=excluded.metadata""",
+                metadata=excluded.metadata,
+                last_modified=excluded.last_modified,
+                maintainer=excluded.maintainer""",
             (
                 pkg.name,
-                pkg.version,
+                str(pkg.version),
                 pkg.desc,
                 pkg.url,
                 getattr(pkg, "filename", None),
@@ -668,11 +784,13 @@ class PackageDB:
                 getattr(pkg, "has_scriptlet", False),
                 source,
                 json.dumps(metadata),
+                getattr(pkg, "builddate", None),
+                getattr(pkg, "packager", None),
             ),
         )
         rec_like = {
             "Name": pkg.name,
-            "Version": pkg.version,
+            "Version": str(pkg.version),
             "Depends": pkg.depends,
             "OptDepends": pkg.optdepends,
             "CheckDepends": getattr(pkg, "checkdepends", []),
@@ -689,7 +807,7 @@ class PackageDB:
         self, cur: sqlite3.Cursor, rec: Dict[str, Any], source: str
     ) -> None:
         name = rec["Name"]
-        version = rec.get("Version")
+        version = str(rec.get("Version"))
         for field in LINK_FIELDS:
             items = set(rec.get(field, []))
             if field == "Provides" and source != "aur" and version:
@@ -713,6 +831,155 @@ class PackageDB:
                 [(name, source, grp) for grp in grp_list],
             )
 
+    def get_enriched_dependencies(
+        self, package: Dict[str, Any]
+    ) -> Dict[str, List[Dict]]:
+        enriched_deps: Dict[str, List[Dict]] = {}
+        dep_types = ["Depends", "MakeDepends", "CheckDepends", "OptDepends"]
+
+        all_dep_specs = []
+        for dep_type in dep_types:
+            all_dep_specs.extend(package.get(dep_type, []))
+
+        if not all_dep_specs:
+            return {}
+
+        base_dep_names = {re.split(r"[<>=]", spec)[0].strip().split(":", 1)[0] for spec in all_dep_specs}
+
+        all_candidates: Dict[str, List[Dict]] = {name: [] for name in base_dep_names}
+        already_added: set[tuple[str, str, str]] = set()
+
+        with self.connection() as conn:
+            for dep_name in base_dep_names:
+                # 1. Find replacers
+                q_replaces = "SELECT p.* FROM links l JOIN packages p ON p.name = l.name AND p.source = l.source WHERE l.link_type = 'Replaces' AND (l.target = ? OR l.target LIKE ?)"
+                for row in conn.execute(
+                    q_replaces, (dep_name, f"{dep_name}=%")
+                ).fetchall():
+                    pkg_data = dict(row)
+                    if (
+                        dep_name,
+                        pkg_data["name"],
+                        pkg_data["source"],
+                    ) not in already_added:
+                        pkg_data["resolution_type"] = "replaces"
+                        all_candidates[dep_name].append(pkg_data)
+                        already_added.add(
+                            (dep_name, pkg_data["name"], pkg_data["source"])
+                        )
+
+                # 2. Find providers
+                q_provides = "SELECT p.* FROM links l JOIN packages p ON p.name = l.name AND p.source = l.source WHERE l.link_type = 'Provides' AND (l.target = ? OR l.target LIKE ?)"
+                for row in conn.execute(
+                    q_provides, (dep_name, f"{dep_name}=%")
+                ).fetchall():
+                    pkg_data = dict(row)
+                    if (
+                        dep_name,
+                        pkg_data["name"],
+                        pkg_data["source"],
+                    ) not in already_added:
+                        pkg_data["resolution_type"] = "provides"
+                        all_candidates[dep_name].append(pkg_data)
+                        already_added.add(
+                            (dep_name, pkg_data["name"], pkg_data["source"])
+                        )
+
+                # 3. Find direct matches
+                q_direct = "SELECT * FROM packages WHERE name = ?"
+                for row in conn.execute(q_direct, (dep_name,)).fetchall():
+                    pkg_data = dict(row)
+                    if (
+                        dep_name,
+                        pkg_data["name"],
+                        pkg_data["source"],
+                    ) not in already_added:
+                        pkg_data["resolution_type"] = "direct"
+                        all_candidates[dep_name].append(pkg_data)
+                        already_added.add(
+                            (dep_name, pkg_data["name"], pkg_data["source"])
+                        )
+
+        for dep_type in dep_types:
+            enriched_deps[dep_type] = []
+            for spec in package.get(dep_type, []):
+                base_name = re.split(r"[<>=]", spec)[0].strip().split(":", 1)[0]
+                description = spec.split(":", 1)[1].strip() if ":" in spec else None
+
+                candidates = all_candidates.get(base_name, [])
+
+                has_repo_provider = any(
+                    p["resolution_type"] == "provides" and p["source"] != "aur"
+                    for p in candidates
+                )
+
+                valid_providers = []
+                if has_repo_provider:
+                    for p in candidates:
+                        if p["resolution_type"] == "replaces" and p["source"] == "aur":
+                            continue
+                        valid_providers.append(p)
+                else:
+                    valid_providers = candidates
+
+                def sort_key(p):
+                    type_order = {"replaces": 0, "provides": 1, "direct": 2}
+                    return (
+                        p["source"] == "aur",
+                        type_order.get(p["resolution_type"], 99),
+                        p["name"],
+                    )
+
+                valid_providers.sort(key=sort_key)
+
+                enriched_deps[dep_type].append(
+                    {
+                        "name": base_name,
+                        "original_spec": spec,
+                        "description": description,
+                        "providers": valid_providers,
+                    }
+                )
+
+        return enriched_deps
+
+    def get_dependants(
+        self, package_name: str, provides: List[str]
+    ) -> Dict[str, List[Dict]]:
+        all_provides = [package_name] + provides
+        placeholders = ",".join("?" for _ in all_provides)
+
+        query = f"""
+            SELECT l.target, p.name, p.source, l.link_type
+            FROM links l
+            JOIN packages p ON p.name = l.name AND p.source = l.source
+            WHERE l.link_type IN ('Depends', 'CheckDepends', 'MakeDepends', 'OptDepends')
+            AND l.target IN ({placeholders})
+        """
+        with self.connection() as conn:
+            results = conn.execute(query, all_provides).fetchall()
+
+        dependants: Dict[str, List[Dict]] = {p: [] for p in all_provides}
+        for target, name, source, link_type in results:
+            base_target = re.split(r"[<>=]", target)[0].strip().split(":", 1)[0]
+            if base_target in dependants:
+                dependants[base_target].append(
+                    {"name": name, "source": source, "link_type": link_type}
+                )
+
+        # Return only those with dependants
+        return {k: v for k, v in dependants.items() if v}
+
+    def get_repo_names(self) -> List[str]:
+        """Returns a list of unique repository names."""
+        with self.connection() as conn:
+            return [
+                row[0]
+                for row in conn.execute(
+                    "SELECT DISTINCT source FROM packages WHERE source != 'aur'"
+                ).fetchall()
+            ]
+
 
 class DependencyResolver:
     """Resolves package dependency trees and detects cycles."""
@@ -731,7 +998,7 @@ class DependencyResolver:
 
         packages_to_resolve = []
         for name in package_names:
-            info = self.db.package_info(name)
+            info = self.db.package_info(name.split(":", 1)[0])
             if info:
                 packages_to_resolve.append(info["name"])
             else:
@@ -772,7 +1039,8 @@ class DependencyResolver:
         path.append(pkg_name)
 
         deps = self.db.get_package_dependencies(pkg_name)
-        for dep_name in deps:
+        for dep_name_full in deps:
+            dep_name = dep_name_full.split(":", 1)[0]
             if dep_name in self.installed:
                 satisfied.add(dep_name)
                 continue
@@ -802,3 +1070,13 @@ class DependencyResolver:
                     "version": pkg_info["version"],
                 }
             )
+
+    def get_repo_names(self) -> List[str]:
+        """Returns a list of unique repository names."""
+        with self.connection() as conn:
+            return [
+                row[0]
+                for row in conn.execute(
+                    "SELECT DISTINCT source FROM packages WHERE source != 'aur'"
+                ).fetchall()
+            ]

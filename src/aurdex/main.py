@@ -94,12 +94,13 @@ class aurdex(App):
             "out_of_date": False,
             "maintainer": "",
             "provides": "",
+            "repos": [],
         }
         self.filters = self.default_filters_structure.copy()
         self._filter_modal: Optional[FilterModal] = None
 
         self._dep_resolve_timer: Optional[Timer] = None
-        self.DEP_RESOLVE_DELAY: float = 1.1
+        self.DEP_RESOLVE_DELAY: float = 0.15
         self._search_timer: Optional[Timer] = None
         self.SEARCH_DEBOUNCE_DELAY: float = 0.3
         self._last_input = None
@@ -183,61 +184,12 @@ class aurdex(App):
                 if aur_details.get(key):
                     enriched_package_data[key] = aur_details[key]
 
-        enriched_deps: Dict[str, List[Dict]] = {}
-        dep_types_to_process = {
-            "Depends": enriched_package_data.get("Depends", []),
-            "MakeDepends": enriched_package_data.get("MakeDepends", []),
-            "CheckDepends": enriched_package_data.get("CheckDepends", []),
-            "OptDepends": enriched_package_data.get("OptDepends", []),
-        }
-
-        for dep_type_key, dep_list_from_pkg in dep_types_to_process.items():
-            enriched_deps[dep_type_key] = []
-            if not dep_list_from_pkg:
-                continue
-            for dep_item_full_spec in dep_list_from_pkg:
-                dep_spec = dep_item_full_spec.split(":")[0].strip()
-                dep_description = (
-                    dep_item_full_spec.split(":", 1)[1].strip()
-                    if ":" in dep_item_full_spec
-                    else None
-                )
-                all_providers = [
-                    self.provide_db.package_info(p[0], p[1])
-                    for p in self.provide_db.search_by_provides(dep_spec)
-                ]
-                bare_name = re.split(r"[<>=]", dep_spec)[0].strip()
-                direct_match_pkg = self.provide_db.package_info(bare_name)
-                if direct_match_pkg:
-                    if not any(
-                        p
-                        and p["name"] == direct_match_pkg["name"]
-                        and p["source"] == direct_match_pkg["source"]
-                        for p in all_providers
-                    ):
-                        all_providers.append(direct_match_pkg)
-                providers = [p for p in all_providers if p]
-                providers.sort(key=lambda p: (p.get("source") == "aur", p.get("name")))
-                enriched_deps[dep_type_key].append(
-                    {
-                        "name": bare_name,
-                        "original_spec": dep_item_full_spec,
-                        "description": dep_description,
-                        "providers": providers,
-                    }
-                )
+        enriched_deps = self.provide_db.get_enriched_dependencies(enriched_package_data)
 
         # --- Dependant Resolution ---
-        all_provides = [original_package_data["name"]] + original_package_data.get(
-            "Provides", []
+        dependants_by_provide = self.provide_db.get_dependants(
+            package_name, original_package_data.get("Provides", [])
         )
-        dependants_by_provide = {provide: [] for provide in all_provides}
-        for provide in all_provides:
-            results = self.provide_db.search_by_depends(provide)
-            for name, source, link_type in results:
-                dependants_by_provide[provide].append(
-                    {"name": name, "source": source, "link_type": link_type}
-                )
 
         # --- Update UI ---
         self.call_from_thread(
@@ -371,7 +323,12 @@ class aurdex(App):
                 for package in new_packages_chunk:
                     key = f"{package['name']}:{package['source']}"
                     table.add_row(
-                        package.get("name", "Unknown"),
+                        "/".join(
+                            [
+                                f"[dim]{package.get('source', '?')}",
+                                f"[/dim][b]{package.get('name', 'Unknown')}[/]",
+                            ]
+                        ),
                         package.get("version", "Unknown"),
                         str(package.get("num_votes", 0)),
                         f"{package.get('popularity', 0):.2f}",
@@ -446,6 +403,9 @@ class aurdex(App):
             active_filters.append(f"Maintainer: '{self.filters['maintainer']}'")
         if self.filters.get("provides"):
             active_filters.append(f"Provides: '{self.filters['provides']}'")
+        
+        if "repos" in self.filters and self.filters["repos"]:
+            active_filters.append(f"Repos: {', '.join(self.filters['repos'])}")
 
         status_label = self.query_one("#filter-status", Label)
         if active_filters:
@@ -485,16 +445,26 @@ class aurdex(App):
                     self.filters["provides"] = modal.query_one(
                         "#filter-provides", Input
                     ).value
+                    
+                    # Handle repo filters
+                    selected_repos = []
+                    for repo in modal.all_repos:
+                        if modal.query_one(f"#filter-repo-{repo}", Checkbox).value:
+                            selected_repos.append(repo)
+                    self.filters["repos"] = selected_repos
 
                     self.filter_packages()
                     self.update_package_list()
                     self.update_filter_status()
 
+        all_repos = self.provide_db.get_repo_names()
         self._filter_modal = FilterModal(
             initial_abandoned=self.filters.get("abandoned", False),
             initial_out_of_date=self.filters.get("out_of_date", False),
             initial_maintainer=self.filters.get("maintainer", ""),
             initial_provides=self.filters.get("provides", ""),
+            repo_filters={repo: repo in self.filters.get("repos", all_repos) for repo in all_repos},
+            all_repos=all_repos,
         )
         self.push_screen(self._filter_modal, on_filter_modal_closed)
 

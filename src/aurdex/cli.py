@@ -198,28 +198,37 @@ def main():
         table.add_column(style="bold magenta")
         table.add_column()
 
+        # --- Enriched Dependencies ---
+        enriched_deps = db.get_enriched_dependencies(package)
+        package.update(enriched_deps)
+
         for key, value in package.items():
-            if isinstance(value, list) and value:
+            if key in enriched_deps and isinstance(value, list) and value:
+                table.add_row(f"{key}:", "")
+                for dep_item in value:
+                    table.add_row("", f"  - {dep_item['original_spec']}")
+                    if dep_item.get("providers"):
+                        for provider in dep_item["providers"]:
+                            resolution_text = ""
+                            if provider.get("resolution_type") == "replaces":
+                                resolution_text = f" (Replaces {dep_item['name']})"
+                            table.add_row(
+                                "",
+                                f"    └─ {provider['source']}/{provider['name']}{resolution_text} ({provider['version']})",
+                            )
+                    else:
+                        table.add_row("", "    └─ [red]Not Available[/red]")
+            elif isinstance(value, list) and value:
                 table.add_row(f"{key}:", "")
                 for item in value:
-                    if isinstance(item, dict):
-                        table.add_row("", Text(str(item), "dim"))
-                    else:
-                        table.add_row("", str(item))
+                    table.add_row("", str(item))
             elif value:
                 table.add_row(f"{key}:", str(value))
 
         # --- Dependants ---
-        all_provides = [package["name"]] + package.get("Provides", [])
-        dependants_by_provide = {provide: [] for provide in all_provides}
-
-        for provide in all_provides:
-            results = db.search_by_depends(provide)
-            for name, source, link_type in results:
-                dependants_by_provide[provide].append(
-                    {"name": name, "source": source, "link_type": link_type}
-                )
-
+        dependants_by_provide = db.get_dependants(
+            package["name"], package.get("Provides", [])
+        )
         has_dependants = any(dependants_by_provide.values())
 
         if has_dependants:

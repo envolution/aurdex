@@ -106,6 +106,8 @@ class FilterModal(ModalScreen[bool | None]):
         initial_out_of_date: bool = False,
         initial_maintainer: str = "",
         initial_provides: str = "",
+        repo_filters: Dict[str, bool] = None,
+        all_repos: List[str] = None,
         **kwargs,
     ) -> None:
         super().__init__(**kwargs)
@@ -113,31 +115,48 @@ class FilterModal(ModalScreen[bool | None]):
         self.initial_out_of_date = initial_out_of_date
         self.initial_maintainer = initial_maintainer
         self.initial_provides = initial_provides
+        self.repo_filters = repo_filters or {}
+        self.all_repos = all_repos or []
 
     def compose(self) -> ComposeResult:
         with Container(id="modal-dialog-scrim"):
             with Container(id="filter-modal-dialog"):
                 yield Label("Filter Packages", id="filter-title")
-                yield Checkbox(
-                    "Abandoned (no maintainer)",
-                    value=self.initial_abandoned,
-                    id="filter-abandoned",
-                )
-                yield Checkbox(
-                    "Out of Date",
-                    value=self.initial_out_of_date,
-                    id="filter-out-of-date",
-                )
-                yield Input(
-                    placeholder="Maintainer contains...",
-                    value=self.initial_maintainer,
-                    id="filter-maintainer",
-                )
-                yield Input(
-                    placeholder="Provides contains...",
-                    value=self.initial_provides,
-                    id="filter-provides",
-                )
+
+                if self.all_repos:
+                    yield Label("Repositories to include", classes="filter-separator")
+                    with Container(id="filter-repos"):
+                        for repo in sorted(self.all_repos):
+                            yield Checkbox(
+                                repo,
+                                value=self.repo_filters.get(repo, True),
+                                id=f"filter-repo-{repo}",
+                                classes="filter-repo-checkbox",
+                            )
+
+                yield Label("Filters", classes="filter-separator")
+                with Container(id="filter-options"):
+                    yield Checkbox(
+                        "Abandoned (no maintainer)",
+                        value=self.initial_abandoned,
+                        id="filter-abandoned",
+                    )
+                    yield Checkbox(
+                        "Out of Date",
+                        value=self.initial_out_of_date,
+                        id="filter-out-of-date",
+                    )
+                    yield Input(
+                        placeholder="Maintainer contains...",
+                        value=self.initial_maintainer,
+                        id="filter-maintainer",
+                    )
+                    yield Input(
+                        placeholder="Provides contains...",
+                        value=self.initial_provides,
+                        id="filter-provides",
+                    )
+
                 with Horizontal(id="filter-buttons"):
                     yield Button("Apply", variant="primary", id="filter-apply")
                     yield Button("Cancel", variant="default", id="filter-cancel")
@@ -426,10 +445,18 @@ class PackageDetails(VerticalScroll):
                                         "[b $success]✔[/]" if is_installed else " "
                                     )
                                     tree_char = "└─" if i == last_index else "├─"
+
+                                    resolution_text = ""
+                                    if (
+                                        provider_pkg_item.get("resolution_type")
+                                        == "replaces"
+                                    ):
+                                        resolution_text = f" [b $warning][dim]-⚠️ Replaces {dep_item['name']}-[/dim][/]"
+
                                     line = (
                                         f"    {tree_char}{status_icon}"
                                         f"[$text-subtle]{provider_pkg_item.get('source', 'N/A')}/"
-                                        f"{provider_pkg_item.get('name', 'N/A')}[/$text-subtle] "
+                                        f"{provider_pkg_item.get('name', 'N/A')}[/$text-subtle]{resolution_text} "
                                         f"[dim $text-subtle]({provider_pkg_item.get('version', 'N/A')})[/]"
                                     )
                                     if is_installed:
@@ -437,7 +464,7 @@ class PackageDetails(VerticalScroll):
                                     content_parts.append(line + "\n")
                             else:
                                 content_parts.append(
-                                    "    [dim]  └─[/dim] [italic $warning][Not Found][/]\n"
+                                    "    [dim]└─[/dim][b $error]✗Not Available[/b $error]\n"
                                 )
                         elif use_enriched_logic_flag:
                             content_parts.append("    [dim]  └─ Resolving...[/dim]\n")
