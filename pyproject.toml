@@ -1,6 +1,6 @@
 [project]
 name = "aurdex"
-version = "0.0.7"
+version = "0.0.8"
 description = "terminal user interface for browsing AUR package metadata"
 authors = [{ name = "involution" }]
 license = "Apache-2.0"
