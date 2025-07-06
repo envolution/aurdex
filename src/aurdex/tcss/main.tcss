@@ -69,33 +69,12 @@ CustomHeader {
     height: auto; /* Adjusted for Label and Input */
     padding-bottom: 1;
 }
-#filter-status {
-    padding: 1 1 1 1; /* top right bottom left */
-    height: auto;
-    min-height: 1;
-}
-
 #modal-dialog-scrim {
     width: 80%;
     height: 80%;
     align: center middle; /* Textual's way to center a single child */
     /* Optional: background for dimming effect */
 }
-
-
-/* Styling for the actual visible dialog box for filters */
-#filter-modal-dialog {
-    width: auto;
-    max-width: 50%;
-    height: auto;
-    max-height: 80%;
-    border: round $primary;
-    background: $panel;
-    layout: vertical; /* To stack label, inputs, buttons */
-    overflow-y: auto;
-}
-
-/* Styling for the actual visible dialog box for sorting */
 #sort-modal-dialog {
     width: auto;
     max-width: 50%;
@@ -106,38 +85,80 @@ CustomHeader {
     layout: vertical;
     overflow-y: auto;
 }
-
-/* Titles within modals (no change needed here, just ensure IDs match) */
-#filter-title, #sort-title {
-    padding-bottom: 1;
-    content-align: center middle;
-    width: 1fr;
-    height: auto;
-}
-
-/* Inputs, Checkboxes, RadioSet in modals */
-#filter-modal-dialog Input, #filter-modal-dialog Checkbox {
-    margin-bottom: 1; /* Space between items */
-    width: 1fr;
-    height: auto;
-}
 #sort-modal-dialog RadioSet {
     width: 1fr;
     height: auto;
     background: $panel;
 }
 #sort-modal-dialog RadioButton {
-    width: 1fr; /* Make radio buttons take full width for better touch/click */
+    width: auto; /* Make radio buttons take full width for better touch/click */
     height: auto;
+}
+/* Filters */
+#filter-modal-dialog {
+    width: 60%;
+    max-width: 80;
+    min-width: 40;
+    padding: 2;
+    border: round $secondary;
+    background: $panel;
+    layout: vertical;
+    align: center middle;
 }
 
-/* Buttons container in modals */
-#filter-buttons, #sort-buttons {
-    padding-top: 1;
-    align-horizontal: center;
+#filter-title {
+    text-style: bold;
+    color: $text;
+    margin-bottom: 1;
 }
-#filter-buttons Button, #sort-buttons Button {
-    width: auto;
-    height: auto;
-    align-horizontal: center;
+
+.filter-separator {
+    text-style: bold;
+    color: $accent;
+    margin-top: 1;
+    margin-bottom: 0;
 }
+
+#filter-repos {
+    layout: grid;
+    grid-size: 2; /* 2 columns of checkboxes */
+    column-span: 2;
+    padding-left: 2;
+}
+
+.filter-repo-checkbox {
+    padding-right: 1;
+    width:auto;
+    height:auto;
+}
+
+#filter-options {
+    layout: grid;
+    grid-size: 2;
+    column-span: 2;
+    padding-left: 2;
+    padding-right: 2;
+}
+
+#filter-options > Checkbox {
+    width: 100%;
+}
+
+#filter-options > Input {
+    grid-columns: 2;
+    width: 100%;
+}
+
+#filter-buttons {
+    layout: horizontal;
+    align-horizontal: right;
+    margin-top: 2;
+    padding-left: 2;
+    padding-right: 2;
+    width: 100%;
+}
+
+#filter-buttons > Button {
+    margin-left: 1;
+}
+
