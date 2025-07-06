@@ -182,6 +182,22 @@ class PackageDB:
         with self.connection() as c:
             return c.execute(q, (base_token, f"{base_token}=%")).fetchall()
 
+    def search_by_depends(self, token: str) -> List[Tuple[str, str, str]]:
+        """Return (name, source, type) where token ∈ any dependency type (Depends, MakeDepends, etc.)."""
+        base_token = re.split(r"[<>=]", token)[0].strip()
+        q = """
+        SELECT name, source, link_type
+        FROM links
+        WHERE link_type IN ('Depends', 'CheckDepends', 'MakeDepends', 'OptDepends')
+        AND (
+            target = ?
+            OR target LIKE ? || '=%'
+            OR target LIKE ? || ':%'
+        );
+        """
+        with self.connection() as c:
+            return c.execute(q, (base_token, f"{base_token}=%")).fetchall()
+
     @functools.lru_cache(maxsize=8192)
     def package_info(
         self, name: str, source: Optional[str] = None

@@ -8,7 +8,7 @@ from rich.text import Text
 from rich.tree import Tree
 import appdirs
 
-from .db import PackageDB, DependencyResolver, AUR_JSON, AUR_DB_URL
+from .db import PackageDB, DependencyResolver
 
 
 def main():
