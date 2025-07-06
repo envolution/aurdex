@@ -196,7 +196,7 @@ class PackageDB:
         );
         """
         with self.connection() as c:
-            return c.execute(q, (base_token, f"{base_token}=%")).fetchall()
+            return c.execute(q, (base_token, base_token, base_token)).fetchall()
 
     @functools.lru_cache(maxsize=8192)
     def package_info(

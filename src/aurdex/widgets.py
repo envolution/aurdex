@@ -223,6 +223,7 @@ class PackageDetails(VerticalScroll):
         self._static_content = Static(id="package-details-content")
         self.package_data: Optional[Dict[str, Any]] = None
         self.enriched_dependencies: Optional[Dict[str, List[Dict]]] = None
+        self.enriched_dependants: Optional[List[Dict]] = None
 
     def compose(self):
         yield self._static_content
@@ -234,9 +235,11 @@ class PackageDetails(VerticalScroll):
         self,
         package: Dict[str, Any],
         enriched_dependencies: Optional[Dict[str, List[Dict]]] = None,
+        enriched_dependants: Optional[Dict[str, List[Dict]]] = None,
     ) -> None:
         self.package_data = package
         self.enriched_dependencies = enriched_dependencies
+        self.enriched_dependants = enriched_dependants
 
         if not package:
             self.update("[dim italic]Select a package to see details.[/dim]")
@@ -449,6 +452,25 @@ class PackageDetails(VerticalScroll):
             content_parts.append(
                 "[dim italic align=center]_No explicit dependencies, provisions, conflicts, or groups listed._[/]\n\n"
             )
+
+        if self.enriched_dependants:
+            content_parts.append("[b $text on $panel]Dependants[/]\n")
+            for provide, dependants in self.enriched_dependants.items():
+                if dependants:
+                    content_parts.append(f"  [b $accent]{provide}[/b $accent]\n")
+                    last_index = len(dependants) - 1
+                    for i, dependant in enumerate(dependants):
+                        tree_char = "└─" if i == last_index else "├─"
+                        content_parts.append(
+                            f"    {tree_char} [$secondary]{dependant['source']}/{dependant['name']} ({dependant['link_type']})[/$secondary]\n"
+                        )
+            content_parts.append("\n")
+        elif self.enriched_dependants == {}:
+            content_parts.append("[b $text on $panel]Dependants[/]\n")
+            content_parts.append("  [dim italic]None[/dim italic]\n\n")
+        else:  # Loading state
+            content_parts.append("[b $text on $panel]Dependants[/]\n")
+            content_parts.append("  [dim]Loading...[/dim]\n\n")
 
         self.update("".join(content_parts))
 

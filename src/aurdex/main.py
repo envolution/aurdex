@@ -162,9 +162,9 @@ class aurdex(App):
         self._last_input = "mouse"
 
     @work(exclusive=True, thread=True)
-    async def resolve_package_dependencies(self, package_name: str) -> None:
+    async def resolve_package_details(self, package_name: str) -> None:
         if not self.provide_db or not package_name:
-            log.warning("resolve_package_dependencies: No provide_db or package_name.")
+            log.warning("resolve_package_details: No provide_db or package_name.")
             return
 
         details_pane = self.query_one("#package-details", PackageDetails)
@@ -175,15 +175,13 @@ class aurdex(App):
         ):
             return
 
+        # --- Dependency Resolution ---
         enriched_package_data = original_package_data.copy()
-
         aur_details = self.provide_db.package_info(name=package_name, source="aur")
         if aur_details:
             for key in ["Depends", "MakeDepends", "CheckDepends", "OptDepends"]:
                 if aur_details.get(key):
                     enriched_package_data[key] = aur_details[key]
-
-        log.debug(f"Resolving dependencies for: {package_name}")
 
         enriched_deps: Dict[str, List[Dict]] = {}
         dep_types_to_process = {
@@ -198,25 +196,19 @@ class aurdex(App):
             if not dep_list_from_pkg:
                 continue
             for dep_item_full_spec in dep_list_from_pkg:
-                # Separate the spec from the description (e.g., "bash: for building")
                 dep_spec = dep_item_full_spec.split(":")[0].strip()
                 dep_description = (
                     dep_item_full_spec.split(":", 1)[1].strip()
                     if ":" in dep_item_full_spec
                     else None
                 )
-
-                # First, find packages that explicitly provide the exact dependency spec
                 all_providers = [
                     self.provide_db.package_info(p[0], p[1])
                     for p in self.provide_db.search_by_provides(dep_spec)
                 ]
-
-                # Also, check for a package with the "bare" name of the dependency
                 bare_name = re.split(r"[<>=]", dep_spec)[0].strip()
                 direct_match_pkg = self.provide_db.package_info(bare_name)
                 if direct_match_pkg:
-                    # Avoid adding a duplicate if it was already found via provides
                     if not any(
                         p
                         and p["name"] == direct_match_pkg["name"]
@@ -224,28 +216,36 @@ class aurdex(App):
                         for p in all_providers
                     ):
                         all_providers.append(direct_match_pkg)
-
-                # Filter out any None results and assign to the final list
                 providers = [p for p in all_providers if p]
-
-                # Sort providers to show official repos before AUR
                 providers.sort(key=lambda p: (p.get("source") == "aur", p.get("name")))
-
                 enriched_deps[dep_type_key].append(
                     {
-                        "name": bare_name,  # Use the bare name for the key
+                        "name": bare_name,
                         "original_spec": dep_item_full_spec,
                         "description": dep_description,
                         "providers": providers,
                     }
                 )
 
+        # --- Dependant Resolution ---
+        all_provides = [original_package_data["name"]] + original_package_data.get(
+            "Provides", []
+        )
+        dependants_by_provide = {provide: [] for provide in all_provides}
+        for provide in all_provides:
+            results = self.provide_db.search_by_depends(provide)
+            for name, source, link_type in results:
+                dependants_by_provide[provide].append(
+                    {"name": name, "source": source, "link_type": link_type}
+                )
+
+        # --- Update UI ---
         self.call_from_thread(
             details_pane.update_package,
             package=enriched_package_data,
             enriched_dependencies=enriched_deps,
+            enriched_dependants=dependants_by_provide,
         )
-        log.debug(f"Finished resolving dependencies for: {package_name}")
 
     def action_search(self) -> None:
         self.query_one("#search-input", Input).focus()
@@ -601,7 +601,7 @@ class aurdex(App):
 
             self._dep_resolve_timer = self.set_timer(
                 self.DEP_RESOLVE_DELAY,
-                lambda: self.resolve_package_dependencies(name),
+                lambda: self.resolve_package_details(name),
             )
 
     @on(DataTable.RowSelected, "#package-table")

@@ -209,6 +209,32 @@ def main():
             elif value:
                 table.add_row(f"{key}:", str(value))
 
+        # --- Dependants ---
+        all_provides = [package["name"]] + package.get("Provides", [])
+        dependants_by_provide = {provide: [] for provide in all_provides}
+
+        for provide in all_provides:
+            results = db.search_by_depends(provide)
+            for name, source, link_type in results:
+                dependants_by_provide[provide].append(
+                    {"name": name, "source": source, "link_type": link_type}
+                )
+
+        has_dependants = any(dependants_by_provide.values())
+
+        if has_dependants:
+            table.add_row("Dependants:", "")
+            for provide, dependants in dependants_by_provide.items():
+                if dependants:
+                    table.add_row("", f"[bold]{provide}[/bold]")
+                    last_index = len(dependants) - 1
+                    for i, dep in enumerate(dependants):
+                        tree_char = "└─" if i == last_index else "├─"
+                        table.add_row(
+                            "",
+                            f"  {tree_char} {dep['source']}/{dep['name']} ({dep['link_type']})",
+                        )
+
         console.print(table)
         return
 
