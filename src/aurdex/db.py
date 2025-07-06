@@ -31,9 +31,6 @@ APP_NAME = "aurdex"
 AUR_JSON = Path(user_cache_dir(APP_NAME)) / "packages-meta-ext-v1.json.gz"
 AUR_DB_URL = "https://aur.manjaro.org/packages-meta-ext-v1.json.gz"
 DB_PATH = Path(user_cache_dir(APP_NAME)) / "packages.db"
-LAST_MODIFIED_FILE = (
-    Path(user_cache_dir(APP_NAME)) / ".packages-meta-ext-v1.json.lastmodified"
-)
 
 
 # --------------------------------------------------------------------------- #
@@ -42,6 +39,11 @@ LAST_MODIFIED_FILE = (
 
 DDL = f"""
 BEGIN;
+
+CREATE TABLE db_metadata (
+    key   TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
 
 CREATE TABLE packages (
     pkg_id            INTEGER,
@@ -321,6 +323,7 @@ class PackageDB:
         else:
             with self.connection() as conn:
                 try:
+                    # Check schema version
                     ver_row = conn.execute("PRAGMA user_version").fetchone()
                     ver = ver_row[0] if ver_row else 0
                     if ver != SCHEMA_VERSION:
@@ -331,6 +334,20 @@ class PackageDB:
                         self.console.print(
                             "[bold yellow]Database schema is outdated. Rebuilding...[/bold yellow]"
                         )
+                    else:
+                        # Check build status
+                        status_row = conn.execute(
+                            "SELECT value FROM db_metadata WHERE key = 'build_status'"
+                        ).fetchone()
+                        status = status_row[0] if status_row else "pending"
+                        if status != "complete":
+                            rebuild_required = True
+                            LOGGER.info(
+                                f"Database build status is '{status}', full rebuild required."
+                            )
+                            self.console.print(
+                                "[bold yellow]Database is not fully populated. Rebuilding...[/bold yellow]"
+                            )
                 except sqlite3.DatabaseError:
                     rebuild_required = True
                     LOGGER.warning(
@@ -422,12 +439,6 @@ class PackageDB:
 
     def _full_rebuild(self, conn: sqlite3.Connection) -> int:
         LOGGER.info("Performing full database rebuild...")
-        if LAST_MODIFIED_FILE.exists():
-            try:
-                LAST_MODIFIED_FILE.unlink()
-                LOGGER.info("Removed last modified file for full rebuild.")
-            except OSError as e:
-                LOGGER.error(f"Error removing last modified file: {e}")
         return self._rebuild(conn)
 
     def _update_database(self, conn: sqlite3.Connection) -> int:
@@ -449,8 +460,14 @@ class PackageDB:
             "PRAGMA integrity_check;"
         )
         conn.executescript(DDL)
+        conn.execute(
+            "INSERT INTO db_metadata (key, value) VALUES ('build_status', 'pending')"
+        )
         aur_count = self._ingest_aur(conn)
         self._ingest_repo(conn)
+        conn.execute(
+            "UPDATE db_metadata SET value = 'complete' WHERE key = 'build_status'"
+        )
         conn.commit()
         return aur_count
 
@@ -460,11 +477,14 @@ class PackageDB:
             self._download_aur_json()
 
         last_modified_ts = 0
-        if LAST_MODIFIED_FILE.exists():
-            try:
-                last_modified_ts = int(LAST_MODIFIED_FILE.read_text().strip())
-            except (ValueError, OSError) as e:
-                LOGGER.error(f"Error reading last modified file: {e}")
+        try:
+            res = conn.execute(
+                "SELECT value FROM db_metadata WHERE key = 'last_modified_ts'"
+            ).fetchone()
+            if res:
+                last_modified_ts = int(res[0])
+        except (sqlite3.Error, ValueError) as e:
+            LOGGER.error(f"Error reading last_modified_ts from db: {e}")
 
         self.db_age = os.path.getmtime(self.aur_json)
         with gzip.open(self.aur_json, "rt", encoding="utf-8") as fp:
@@ -486,9 +506,12 @@ class PackageDB:
 
         if updated_count > 0:
             try:
-                LAST_MODIFIED_FILE.write_text(str(new_max_last_modified))
-            except OSError as e:
-                LOGGER.error(f"Error writing to last modified file: {e}")
+                conn.execute(
+                    "INSERT OR REPLACE INTO db_metadata (key, value) VALUES ('last_modified_ts', ?)",
+                    (str(new_max_last_modified),),
+                )
+            except sqlite3.Error as e:
+                LOGGER.error(f"Error writing last_modified_ts to db: {e}")
 
         LOGGER.info(
             f"AUR packages ingested: {updated_count} new/updated packages processed."
