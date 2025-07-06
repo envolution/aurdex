@@ -33,7 +33,7 @@ CommentsModal {
 
 .pinned-content-wrapper {
     layout: vertical;
-    background: $secondary;
+    background: $secondary-darken-3;
     border: round $success-darken-1;
     padding: 1 1;
     height: auto;
