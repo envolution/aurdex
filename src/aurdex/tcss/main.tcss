@@ -74,24 +74,28 @@ CustomHeader {
     height: 1fr;
     align: center middle;
 }
+#sort-title{
+    color: $accent;
+}
 #sort-modal-dialog {
-    width: auto;
-    max-width: 50%;
-    height: auto;
-    max-height: 70%;
+    width: 36;
+    height: 19;
     border: round $primary;
     background: $panel;
-    layout: vertical;
-    overflow-y: auto;
+    align: center middle;
+    align: center middle;
+    padding: 1;
 }
 #sort-modal-dialog RadioSet {
-    width: 1fr;
+    width: auto;
     height: auto;
-    background: $panel;
+    border: round $boost;
 }
-#sort-modal-dialog RadioButton {
-    width: auto; /* Make radio buttons take full width for better touch/click */
+#sort-modal-dialog Checkbox {
+    width: 100%;
     height: auto;
+    border: round $boost;
+    margin-bottom: 1;
 }
 /* Filters */
 #filter-modal-dialog {

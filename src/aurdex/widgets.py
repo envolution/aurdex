@@ -233,6 +233,11 @@ class SortModal(ModalScreen[Optional[Dict[str, Any]]]):
         else:
             self.dismiss(None)
 
+    @on(Key)
+    def handle_escape(self, event: Key) -> None:
+        if event.key == "escape":
+            self.dismiss()
+
     @on(Button.Pressed, "#sort-cancel")
     def cancel_sort(self) -> None:
         self.dismiss(None)
