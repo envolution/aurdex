@@ -183,7 +183,9 @@ class PackageDB:
         """
         with self.connection() as conn:
             results = conn.execute(query, (pkg_name, pkg_name)).fetchall()
-        return [re.split(r"[<>=]", row[0])[0].strip().split(":", 1)[0] for row in results]
+        return [
+            re.split(r"[<>=]", row[0])[0].strip().split(":", 1)[0] for row in results
+        ]
 
     def get_packages_dependencies(self, pkg_names: List[str]) -> Dict[str, List[str]]:
         """Get dependencies for a list of packages in a batch."""
@@ -844,7 +846,10 @@ class PackageDB:
         if not all_dep_specs:
             return {}
 
-        base_dep_names = {re.split(r"[<>=]", spec)[0].strip().split(":", 1)[0] for spec in all_dep_specs}
+        base_dep_names = {
+            re.split(r"[<>=]", spec)[0].strip().split(":", 1)[0]
+            for spec in all_dep_specs
+        }
 
         all_candidates: Dict[str, List[Dict]] = {name: [] for name in base_dep_names}
         already_added: set[tuple[str, str, str]] = set()
@@ -976,7 +981,7 @@ class PackageDB:
             return [
                 row[0]
                 for row in conn.execute(
-                    "SELECT DISTINCT source FROM packages WHERE source != 'aur'"
+                    "SELECT DISTINCT source FROM packages"
                 ).fetchall()
             ]
 

@@ -12,6 +12,7 @@ from textual.reactive import reactive
 from textual.app import ComposeResult
 from textual.containers import Container, Horizontal, Vertical, VerticalScroll
 from textual.widget import Widget
+from textual.events import Key
 from textual.widgets import (
     Footer,
     Input,
@@ -100,6 +101,9 @@ class CustomHeader(Container):
 
 
 class FilterModal(ModalScreen[bool | None]):
+    TITLE = "title"
+    SUB_TITLE = "subtitle"
+
     def __init__(
         self,
         initial_abandoned: bool = False,
@@ -121,8 +125,6 @@ class FilterModal(ModalScreen[bool | None]):
     def compose(self) -> ComposeResult:
         with Container(id="modal-dialog-scrim"):
             with Container(id="filter-modal-dialog"):
-                yield Label("Filter Packages", id="filter-title")
-
                 if self.all_repos:
                     yield Label("Repositories to include", classes="filter-separator")
                     with Container(id="filter-repos"):
@@ -168,6 +170,11 @@ class FilterModal(ModalScreen[bool | None]):
     @on(Button.Pressed, "#filter-cancel")
     def cancel_filters(self) -> None:
         self.dismiss(False)
+
+    @on(Key)
+    def handle_escape(self, event: Key) -> None:
+        if event.key == "escape":
+            self.dismiss()
 
 
 class SortModal(ModalScreen[Optional[Dict[str, Any]]]):

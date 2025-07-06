@@ -70,10 +70,9 @@ CustomHeader {
     padding-bottom: 1;
 }
 #modal-dialog-scrim {
-    width: 80%;
-    height: 80%;
-    align: center middle; /* Textual's way to center a single child */
-    /* Optional: background for dimming effect */
+    width: 1fr;
+    height: 1fr;
+    align: center middle;
 }
 #sort-modal-dialog {
     width: auto;
@@ -96,69 +95,64 @@ CustomHeader {
 }
 /* Filters */
 #filter-modal-dialog {
-    width: 60%;
+    width: 80%;
     max-width: 80;
     min-width: 40;
-    padding: 2;
+    min-height: 28;
+    height: 50%;
     border: round $secondary;
     background: $panel;
     layout: vertical;
-    align: center middle;
+    content-align:center middle;
+    padding: 1;
 }
-
 #filter-title {
     text-style: bold;
     color: $text;
-    margin-bottom: 1;
 }
-
 .filter-separator {
     text-style: bold;
     color: $accent;
-    margin-top: 1;
-    margin-bottom: 0;
+    margin: 0;
 }
-
 #filter-repos {
     layout: grid;
-    grid-size: 2; /* 2 columns of checkboxes */
-    column-span: 2;
-    padding-left: 2;
+    grid-gutter: 1;
+    grid-size: 3;
+    height: auto;
+    border: round $boost;
 }
-
 .filter-repo-checkbox {
-    padding-right: 1;
-    width:auto;
+    width:100%;
     height:auto;
 }
-
 #filter-options {
     layout: grid;
+    grid-gutter: 1;
     grid-size: 2;
-    column-span: 2;
-    padding-left: 2;
-    padding-right: 2;
+    column-span: 1;
+    height:auto;
+    border: round $boost;
 }
-
 #filter-options > Checkbox {
+    padding-left: 1;
     width: 100%;
+    height: auto;
 }
-
 #filter-options > Input {
     grid-columns: 2;
+    grid-size: 2;
     width: 100%;
+    height: auto;
 }
-
 #filter-buttons {
     layout: horizontal;
-    align-horizontal: right;
-    margin-top: 2;
-    padding-left: 2;
-    padding-right: 2;
+    align-horizontal: center;
+    margin-top: 1;
+    margin-bottom: 0;
     width: 100%;
 }
-
 #filter-buttons > Button {
-    margin-left: 1;
+    margin:0 3 0 3;
 }
 
