@@ -325,6 +325,22 @@ class PackageDB:
                     )
 
         if rebuild_required:
+            try:
+                os.unlink(self.db_path)
+            except FileNotFoundError:
+                self.console.print(
+                    f"[dim]No existing database found at {self.db_path}[/dim]"
+                )
+            except Exception as e:
+                self.console.print(f"[bold red]Failed to remove DB:[/bold red] {e}")
+
+            try:
+                self.db_path.parent.mkdir(parents=True, exist_ok=True)
+            except Exception as e:
+                self.console.print(
+                    f"[bold red]Failed to create directory:[/bold red] {e}"
+                )
+                raise
             self.rebuild(full=True, download=True)
 
     def _download_aur_json(self) -> None:
