@@ -101,7 +101,7 @@ class aurdex(App):
         self._filter_modal: Optional[FilterModal] = None
 
         self._dep_resolve_timer: Optional[Timer] = None
-        self.DEP_RESOLVE_DELAY: float = 1.15
+        self.DEP_RESOLVE_DELAY: float = 0.05
         self._search_timer: Optional[Timer] = None
         self.SEARCH_DEBOUNCE_DELAY: float = 0.3
         self._last_input = None
@@ -165,54 +165,43 @@ class aurdex(App):
         self._last_input = "mouse"
 
     @work(exclusive=True, thread=True)
-    async def resolve_package_details(
+    async def update_package_details_worker(
         self, package_name: str, package_source: str, cancel_event: threading.Event
     ) -> None:
-        if not self.provide_db or not package_name:
-            log.warning("resolve_package_details: No provide_db or package_name.")
+        """Worker to fetch, process, and display package details."""
+        if cancel_event.is_set():
+            return
+
+        # --- Initial data fetch ---
+        package_data = self.provide_db.package_info(name=package_name, source=package_source)
+        if not package_data:
             return
 
         if cancel_event.is_set():
             return
 
+        # --- Update UI with basic info ---
         details_pane = self.query_one("#package-details", PackageDetails)
-        original_package_data = details_pane.package_data
-        if (
-            not original_package_data
-            or original_package_data.get("name") != package_name
-        ):
-            return
-
-        # --- Dependency Resolution ---
-        enriched_package_data = original_package_data.copy()
-        aur_details = self.provide_db.package_info(
-            name=package_name, source=package_source
-        )
-        if aur_details:
-            for key in ["Depends", "MakeDepends", "CheckDepends", "OptDepends"]:
-                if aur_details.get(key):
-                    enriched_package_data[key] = aur_details[key]
+        self.call_from_thread(details_pane.update_package, package=package_data)
 
         if cancel_event.is_set():
             return
 
-        enriched_deps = self.provide_db.get_enriched_dependencies(enriched_package_data)
-
+        # --- Dependency and Dependant Resolution (heavy part) ---
+        enriched_deps = self.provide_db.get_enriched_dependencies(package_data)
         if cancel_event.is_set():
             return
 
-        # --- Dependant Resolution ---
         dependants_by_provide = self.provide_db.get_dependants(
-            package_name, original_package_data.get("Provides", [])
+            package_name, package_data.get("Provides", [])
         )
-
         if cancel_event.is_set():
             return
 
-        # --- Update UI ---
+        # --- Final UI update with enriched data ---
         self.call_from_thread(
             details_pane.update_package,
-            package=enriched_package_data,
+            package=package_data,
             enriched_dependencies=enriched_deps,
             enriched_dependants=dependants_by_provide,
         )
@@ -584,20 +573,18 @@ class aurdex(App):
         if not event.row_key.value:
             return
 
+        details_pane = self.query_one("#package-details", PackageDetails)
+        details_pane.display_loading()
+
         name, source = event.row_key.value.split(":")
-        package = self.provide_db.package_info(name=name, source=source)
-
-        if package:
-            details_pane = self.query_one("#package-details", PackageDetails)
-            details_pane.update_package(package=package)
-
-            self._dep_resolve_cancel_event = threading.Event()
-            self._dep_resolve_timer = self.set_timer(
-                self.DEP_RESOLVE_DELAY,
-                lambda: self.resolve_package_details(
-                    name, source, self._dep_resolve_cancel_event
-                ),
-            )
+        
+        self._dep_resolve_cancel_event = threading.Event()
+        self._dep_resolve_timer = self.set_timer(
+            self.DEP_RESOLVE_DELAY,
+            lambda: self.update_package_details_worker(
+                name, source, self._dep_resolve_cancel_event
+            ),
+        )
 
     @on(DataTable.RowSelected, "#package-table")
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:

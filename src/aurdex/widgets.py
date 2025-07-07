@@ -262,6 +262,13 @@ class PackageDetails(VerticalScroll):
     def update(self, content: str | Text):
         self._static_content.update(content)
 
+    def display_loading(self) -> None:
+        self.update(
+            Text.from_markup(
+                "[dim italic]Loading package details...[/dim italic]", justify="center"
+            )
+        )
+
     def update_package(
         self,
         package: Dict[str, Any],
