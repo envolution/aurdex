@@ -4,6 +4,7 @@ import json
 import re
 import logging as log
 import time
+import threading
 
 from typing import Optional, List, Dict, Any
 
@@ -100,10 +101,11 @@ class aurdex(App):
         self._filter_modal: Optional[FilterModal] = None
 
         self._dep_resolve_timer: Optional[Timer] = None
-        self.DEP_RESOLVE_DELAY: float = 0.15
+        self.DEP_RESOLVE_DELAY: float = 1.15
         self._search_timer: Optional[Timer] = None
         self.SEARCH_DEBOUNCE_DELAY: float = 0.3
         self._last_input = None
+        self._dep_resolve_cancel_event: Optional[threading.Event] = None
 
     def compose(self) -> ComposeResult:
         yield CustomHeader()
@@ -163,9 +165,14 @@ class aurdex(App):
         self._last_input = "mouse"
 
     @work(exclusive=True, thread=True)
-    async def resolve_package_details(self, package_name: str) -> None:
+    async def resolve_package_details(
+        self, package_name: str, package_source: str, cancel_event: threading.Event
+    ) -> None:
         if not self.provide_db or not package_name:
             log.warning("resolve_package_details: No provide_db or package_name.")
+            return
+
+        if cancel_event.is_set():
             return
 
         details_pane = self.query_one("#package-details", PackageDetails)
@@ -178,18 +185,29 @@ class aurdex(App):
 
         # --- Dependency Resolution ---
         enriched_package_data = original_package_data.copy()
-        aur_details = self.provide_db.package_info(name=package_name, source="aur")
+        aur_details = self.provide_db.package_info(
+            name=package_name, source=package_source
+        )
         if aur_details:
             for key in ["Depends", "MakeDepends", "CheckDepends", "OptDepends"]:
                 if aur_details.get(key):
                     enriched_package_data[key] = aur_details[key]
 
+        if cancel_event.is_set():
+            return
+
         enriched_deps = self.provide_db.get_enriched_dependencies(enriched_package_data)
+
+        if cancel_event.is_set():
+            return
 
         # --- Dependant Resolution ---
         dependants_by_provide = self.provide_db.get_dependants(
             package_name, original_package_data.get("Provides", [])
         )
+
+        if cancel_event.is_set():
+            return
 
         # --- Update UI ---
         self.call_from_thread(
@@ -403,7 +421,7 @@ class aurdex(App):
             active_filters.append(f"Maintainer: '{self.filters['maintainer']}'")
         if self.filters.get("provides"):
             active_filters.append(f"Provides: '{self.filters['provides']}'")
-        
+
         if "repos" in self.filters and self.filters["repos"]:
             active_filters.append(f"Repos: {', '.join(self.filters['repos'])}")
 
@@ -445,7 +463,7 @@ class aurdex(App):
                     self.filters["provides"] = modal.query_one(
                         "#filter-provides", Input
                     ).value
-                    
+
                     # Handle repo filters
                     selected_repos = []
                     for repo in modal.all_repos:
@@ -463,7 +481,9 @@ class aurdex(App):
             initial_out_of_date=self.filters.get("out_of_date", False),
             initial_maintainer=self.filters.get("maintainer", ""),
             initial_provides=self.filters.get("provides", ""),
-            repo_filters={repo: repo in self.filters.get("repos", all_repos) for repo in all_repos},
+            repo_filters={
+                repo: repo in self.filters.get("repos", all_repos) for repo in all_repos
+            },
             all_repos=all_repos,
         )
         self.push_screen(self._filter_modal, on_filter_modal_closed)
@@ -558,6 +578,8 @@ class aurdex(App):
         self.check_load_more()
         if self._dep_resolve_timer:
             self._dep_resolve_timer.stop()
+        if self._dep_resolve_cancel_event:
+            self._dep_resolve_cancel_event.set()
 
         if not event.row_key.value:
             return
@@ -569,9 +591,12 @@ class aurdex(App):
             details_pane = self.query_one("#package-details", PackageDetails)
             details_pane.update_package(package=package)
 
+            self._dep_resolve_cancel_event = threading.Event()
             self._dep_resolve_timer = self.set_timer(
                 self.DEP_RESOLVE_DELAY,
-                lambda: self.resolve_package_details(name),
+                lambda: self.resolve_package_details(
+                    name, source, self._dep_resolve_cancel_event
+                ),
             )
 
     @on(DataTable.RowSelected, "#package-table")
@@ -580,6 +605,7 @@ class aurdex(App):
             return
         name, source = event.row_key.value.split(":")
         package = self.provide_db.package_info(name=name, source=source)
+        self.log.debug("DATATABLE=> ", "{package}")
         if self._last_input == "keyboard":
             if package:
                 if package.get("source") == "aur":
