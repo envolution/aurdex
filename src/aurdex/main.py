@@ -101,9 +101,9 @@ class aurdex(App):
         self._filter_modal: Optional[FilterModal] = None
 
         self._dep_resolve_timer: Optional[Timer] = None
-        self.DEP_RESOLVE_DELAY: float = 0.05
+        self.DEP_RESOLVE_DELAY: float = 0.1
         self._search_timer: Optional[Timer] = None
-        self.SEARCH_DEBOUNCE_DELAY: float = 0.3
+        self.SEARCH_DEBOUNCE_DELAY: float = 0.2
         self._last_input = None
         self._dep_resolve_cancel_event: Optional[threading.Event] = None
 
@@ -173,7 +173,9 @@ class aurdex(App):
             return
 
         # --- Initial data fetch ---
-        package_data = self.provide_db.package_info(name=package_name, source=package_source)
+        package_data = self.provide_db.package_info(
+            name=package_name, source=package_source
+        )
         if not package_data:
             return
 
@@ -577,7 +579,7 @@ class aurdex(App):
         details_pane.display_loading()
 
         name, source = event.row_key.value.split(":")
-        
+
         self._dep_resolve_cancel_event = threading.Event()
         self._dep_resolve_timer = self.set_timer(
             self.DEP_RESOLVE_DELAY,

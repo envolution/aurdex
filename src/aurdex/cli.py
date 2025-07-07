@@ -3,12 +3,31 @@ import importlib.metadata
 import json
 import os
 from rich.console import Console
-from rich.table import Table
-from rich.text import Text
 from rich.tree import Tree
 import appdirs
 
 from .db import PackageDB, DependencyResolver
+from .formatters import format_package_details
+
+
+def translate_textual_to_rich_markup(markup_string: str) -> str:
+    """Translates Textual's style variables to Rich-compatible color names."""
+    style_map = {
+        "$text": "default",
+        "$link": "blue",
+        "$primary": "cyan",
+        "$secondary": "sky_blue1",
+        "$accent": "medium_purple",
+        "$warning": "yellow",
+        "$error": "red",
+        "$success": "green",
+        "$panel": "grey70",
+        "$text-muted": "grey50",
+        "$text-subtle": "grey50",
+    }
+    for textual_style, rich_style in style_map.items():
+        markup_string = markup_string.replace(textual_style, rich_style)
+    return markup_string
 
 
 def main():
@@ -194,57 +213,19 @@ def main():
             print(f"Package '{args.package_name}' not found.")
             return
 
-        table = Table(show_header=False, box=None, padding=(0, 2))
-        table.add_column(style="bold magenta")
-        table.add_column()
-
-        # --- Enriched Dependencies ---
         enriched_deps = db.get_enriched_dependencies(package)
-        package.update(enriched_deps)
-
-        for key, value in package.items():
-            if key in enriched_deps and isinstance(value, list) and value:
-                table.add_row(f"{key}:", "")
-                for dep_item in value:
-                    table.add_row("", f"  - {dep_item['original_spec']}")
-                    if dep_item.get("providers"):
-                        for provider in dep_item["providers"]:
-                            resolution_text = ""
-                            if provider.get("resolution_type") == "replaces":
-                                resolution_text = f" (Replaces {dep_item['name']})"
-                            table.add_row(
-                                "",
-                                f"    └─ {provider['source']}/{provider['name']}{resolution_text} ({provider['version']})",
-                            )
-                    else:
-                        table.add_row("", "    └─ [red]Not Available[/red]")
-            elif isinstance(value, list) and value:
-                table.add_row(f"{key}:", "")
-                for item in value:
-                    table.add_row("", str(item))
-            elif value:
-                table.add_row(f"{key}:", str(value))
-
-        # --- Dependants ---
         dependants_by_provide = db.get_dependants(
             package["name"], package.get("Provides", [])
         )
-        has_dependants = any(dependants_by_provide.values())
 
-        if has_dependants:
-            table.add_row("Dependants:", "")
-            for provide, dependants in dependants_by_provide.items():
-                if dependants:
-                    table.add_row("", f"[bold]{provide}[/bold]")
-                    last_index = len(dependants) - 1
-                    for i, dep in enumerate(dependants):
-                        tree_char = "└─" if i == last_index else "├─"
-                        table.add_row(
-                            "",
-                            f"  {tree_char} {dep['source']}/{dep['name']} ({dep['link_type']})",
-                        )
-
-        console.print(table)
+        formatted_output = format_package_details(
+            package=package,
+            enriched_dependencies=enriched_deps,
+            enriched_dependants=dependants_by_provide,
+            installed_packages=db.installed_packages,
+        )
+        rich_output = translate_textual_to_rich_markup(formatted_output)
+        console.print(rich_output)
         return
 
     config_path_dir = appdirs.user_config_dir(appname="aurdex")
