@@ -61,7 +61,13 @@ def main():
         "--deptree",
         nargs="+",
         metavar="PACKAGE",
-        help="Resolve and display the dependency installation tree for one or more packages.",
+        help="Resolve and display the shallow dependency installation tree for one or more packages.",
+    )
+    parser.add_argument(
+        "--deptree-deep",
+        nargs="+",
+        metavar="PACKAGE",
+        help="Resolve and display the deep dependency installation tree for one or more packages.",
     )
     parser.add_argument(
         "--rebuild-db",
@@ -99,13 +105,19 @@ def main():
     db = PackageDB(console=console)
     db._ensure_database()
 
-    if args.deptree:
+    if args.deptree or args.deptree_deep:
         resolver = DependencyResolver(db, console=console)
-        package_names = args.deptree
+        package_names = args.deptree or args.deptree_deep
+        deep_search = args.deptree_deep is not None
+
         console.print(
-            f"[bold]Resolving dependency tree for: {', '.join(package_names)}...[/bold]"
+            f"[bold]Resolving {'deep' if deep_search else 'shallow'} dependency tree for: {', '.join(package_names)}...[/bold]"
         )
-        result = resolver.resolve_dependency_tree(package_names)
+        
+        if deep_search:
+            result = resolver.resolve_dependency_tree_deep(package_names)
+        else:
+            result = resolver.resolve_dependency_tree_shallow(package_names)
 
         if not result["order"] and not result["cycles"] and not result.get("satisfied"):
             console.print(

@@ -142,6 +142,7 @@ class PackageDB:
         if self.db_path.exists():
             self.db_age = self.db_path.stat().st_mtime
         self.installed_packages = self._get_installed_packages()
+        self.installed_provides = self._get_installed_provides()
         self._pyalpm_handle = None
 
     def _get_installed_packages(self) -> Dict[str, str]:
@@ -154,6 +155,22 @@ class PackageDB:
         except pyalpm.error as e:
             LOGGER.error(f"Could not read local package database: {e}")
             return {}
+
+    def _get_installed_provides(self) -> Dict[str, str]:
+        """Create a map of provided names to the packages that provide them."""
+        if not _HAVE_PYALPM:
+            return {}
+        provides_map = {}
+        try:
+            handle = pyalpm.Handle("/", "/var/lib/pacman")
+            localdb = handle.get_localdb()
+            for pkg in localdb.pkgcache:
+                for p in pkg.provides:
+                    provided_name = p.split("=")[0].strip()
+                    provides_map[provided_name] = pkg.name
+        except pyalpm.error as e:
+            LOGGER.error(f"Could not read local package database for provides: {e}")
+        return provides_map
 
     @contextlib.contextmanager
     def connection(self) -> Iterator[sqlite3.Connection]:
@@ -993,8 +1010,9 @@ class DependencyResolver:
         self.db = db
         self.console = console
         self.installed: Dict[str, str] = db.installed_packages
+        self.installed_provides: Dict[str, str] = db.installed_provides
 
-    def resolve_dependency_tree(self, package_names: List[str]) -> Dict[str, Any]:
+    def resolve_dependency_tree_deep(self, package_names: List[str]) -> Dict[str, Any]:
         visiting: set[str] = set()
         visited: set[str] = set()
         satisfied: set[str] = set()
@@ -1015,8 +1033,12 @@ class DependencyResolver:
         for name in packages_to_resolve:
             if name in self.installed:
                 satisfied.add(name)
+            elif name in self.installed_provides:
+                provider = self.installed_provides[name]
+                satisfied.add(provider)
+
             if name not in visited:
-                self._dfs(name, visiting, visited, order, cycles, [], satisfied)
+                self._dfs_deep(name, visiting, visited, order, cycles, [], satisfied)
 
         final_order_info = [self.db.package_info(p["name"], p["source"]) for p in order]
         final_order = [
@@ -1030,7 +1052,49 @@ class DependencyResolver:
             "satisfied": list(satisfied),
         }
 
-    def _dfs(
+    def resolve_dependency_tree_shallow(
+        self, package_names: List[str]
+    ) -> Dict[str, Any]:
+        visiting: set[str] = set()
+        visited: set[str] = set()
+        satisfied: set[str] = set()
+        order: List[Dict[str, Any]] = []
+        cycles: List[List[str]] = []
+
+        packages_to_resolve = []
+        for name in package_names:
+            info = self.db.package_info(name.split(":", 1)[0])
+            if info:
+                packages_to_resolve.append(info["name"])
+            else:
+                self.console.print(
+                    f"[red]Error: Could not find any package matching '{name}'.[/red]"
+                )
+                return {"order": [], "cycles": [], "installed": {}, "satisfied": []}
+
+        for name in packages_to_resolve:
+            if name in self.installed:
+                satisfied.add(name)
+            elif name in self.installed_provides:
+                provider = self.installed_provides[name]
+                satisfied.add(provider)
+
+            if name not in visited:
+                self._dfs_shallow(name, visiting, visited, order, cycles, [], satisfied)
+
+        final_order_info = [self.db.package_info(p["name"], p["source"]) for p in order]
+        final_order = [
+            p for p in final_order_info if p and p["name"] not in self.installed
+        ]
+
+        return {
+            "order": final_order,
+            "cycles": cycles,
+            "installed": self.installed.keys(),
+            "satisfied": list(satisfied),
+        }
+
+    def _dfs_deep(
         self,
         pkg_name: str,
         visiting: set[str],
@@ -1046,8 +1110,36 @@ class DependencyResolver:
         deps = self.db.get_package_dependencies(pkg_name)
         for dep_name_full in deps:
             dep_name = dep_name_full.split(":", 1)[0]
+
             if dep_name in self.installed:
-                satisfied.add(dep_name)
+                if dep_name not in satisfied:
+                    satisfied.add(dep_name)
+                    if dep_name not in visited:
+                        self._dfs_deep(
+                            dep_name,
+                            visiting,
+                            visited,
+                            order,
+                            cycles,
+                            path[:],
+                            satisfied,
+                        )
+                continue
+
+            if dep_name in self.installed_provides:
+                provider = self.installed_provides[dep_name]
+                if provider not in satisfied:
+                    satisfied.add(provider)
+                    if provider not in visited:
+                        self._dfs_deep(
+                            provider,
+                            visiting,
+                            visited,
+                            order,
+                            cycles,
+                            path[:],
+                            satisfied,
+                        )
                 continue
 
             if dep_name in visiting:
@@ -1059,22 +1151,76 @@ class DependencyResolver:
                 continue
 
             if dep_name not in visited:
-                self._dfs(
+                self._dfs_deep(
                     dep_name, visiting, visited, order, cycles, path[:], satisfied
                 )
 
         path.pop()
         visiting.remove(pkg_name)
-        visited.add(pkg_name)
-        pkg_info = self.db.package_info(pkg_name)
-        if pkg_info:
-            order.append(
-                {
-                    "name": pkg_name,
-                    "source": pkg_info["source"],
-                    "version": pkg_info["version"],
-                }
-            )
+        if pkg_name not in visited:
+            visited.add(pkg_name)
+            pkg_info = self.db.package_info(pkg_name)
+            if pkg_info:
+                order.append(
+                    {
+                        "name": pkg_name,
+                        "source": pkg_info["source"],
+                        "version": pkg_info["version"],
+                    }
+                )
+
+    def _dfs_shallow(
+        self,
+        pkg_name: str,
+        visiting: set[str],
+        visited: set[str],
+        order: List[Dict[str, Any]],
+        cycles: List[List[str]],
+        path: List[str],
+        satisfied: set[str],
+    ):
+        visiting.add(pkg_name)
+        path.append(pkg_name)
+
+        deps = self.db.get_package_dependencies(pkg_name)
+        for dep_name_full in deps:
+            dep_name = dep_name_full.split(":", 1)[0]
+
+            if dep_name in self.installed:
+                satisfied.add(dep_name)
+                continue
+
+            if dep_name in self.installed_provides:
+                provider = self.installed_provides[dep_name]
+                satisfied.add(provider)
+                continue
+
+            if dep_name in visiting:
+                try:
+                    cycle_start_index = path.index(dep_name)
+                    cycles.append(path[cycle_start_index:])
+                except ValueError:
+                    cycles.append(path + [dep_name])
+                continue
+
+            if dep_name not in visited:
+                self._dfs_shallow(
+                    dep_name, visiting, visited, order, cycles, path[:], satisfied
+                )
+
+        path.pop()
+        visiting.remove(pkg_name)
+        if pkg_name not in visited:
+            visited.add(pkg_name)
+            pkg_info = self.db.package_info(pkg_name)
+            if pkg_info:
+                order.append(
+                    {
+                        "name": pkg_name,
+                        "source": pkg_info["source"],
+                        "version": pkg_info["version"],
+                    }
+                )
 
     def get_repo_names(self) -> List[str]:
         """Returns a list of unique repository names."""
