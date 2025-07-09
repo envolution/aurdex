@@ -604,13 +604,13 @@ class CommentsModal(ModalScreen[None]):
 
     def __init__(self, package_data: Dict[str, Any]):
         super().__init__()
-        self.package_base = package_data.get("PackageBase", "unknown_package")
+        self.package_name = package_data.get("name", "unknown_package")
         self.parsed_comments = []
         self.comment_counter = 0
         self._pinned_rendered = False
 
     def compose(self) -> ComposeResult:
-        yield Label(f"Comments for {self.package_base}", id="modal-title")
+        yield Label(f"Comments for {self.package_name}", id="modal-title")
         yield Container(LoadingIndicator(), id="loading")
         yield VerticalScroll(id="comments-scroller")
         yield Footer()
@@ -841,7 +841,7 @@ class CommentsModal(ModalScreen[None]):
             comments_scroller.display = False
             loading_indicator_container.display = True
 
-        aur_package_url = f"https://aur.archlinux.org/packages/{self.package_base}?O={self._current_offset}"
+        aur_package_url = f"https://aur.archlinux.org/packages/{self.package_name}?O={self._current_offset}"
         html_content, _ = await self._fetch_aur_page_html(aur_package_url)
         has_next_page = False
         if html_content:
