@@ -79,13 +79,15 @@ class CustomHeader(Container):
         age_seconds = now - self.db_age
 
         if age_seconds < 60:
-            return f"database update: [b]{int(age_seconds)}s ago[/b]"
+            return f"database update: [b green]{int(age_seconds)}s ago[/b green]"
         elif age_seconds < 3600:
-            return f"database update: [b]{int(age_seconds / 60)}m ago[/b]"
+            return f"database update: [b green]{int(age_seconds / 60)}m ago[/b green]"
         elif age_seconds < 86400:
-            return f"database update: [b]{int(age_seconds / 3600)}h ago[/b]"
+            return (
+                f"database update: [b orange]{int(age_seconds / 3600)}h ago[/b orange]"
+            )
         else:
-            return f"database update: [b]{int(age_seconds / 86400)}d ago[/b]"
+            return f"database update: [b red]{int(age_seconds / 86400)}d ago[/b red]"
 
     def refresh_header_text(self) -> None:
         """Builds and sets the header's renderable text."""
