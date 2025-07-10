@@ -565,14 +565,8 @@ class PackageDB:
 
     def _update_database(self, conn: sqlite3.Connection) -> int:
         LOGGER.info("Performing incremental database update...")
-        conn.execute(
-            "INSERT OR REPLACE INTO db_metadata (key, value) VALUES ('build_status', 'pending')"
-        )
         aur_updated_count = self._ingest_aur_full(conn)
         self._update_repo_incrementally(conn)
-        conn.execute(
-            "UPDATE db_metadata SET value = 'complete' WHERE key = 'build_status'"
-        )
         conn.commit()
         LOGGER.info("Incremental update finished.")
         return aur_updated_count
@@ -587,14 +581,8 @@ class PackageDB:
             "PRAGMA integrity_check;"
         )
         conn.executescript(DDL)
-        conn.execute(
-            "INSERT INTO db_metadata (key, value) VALUES ('build_status', 'pending')"
-        )
         aur_count = self._ingest_aur_full(conn)
         self._ingest_repo(conn)
-        conn.execute(
-            "UPDATE db_metadata SET value = 'complete' WHERE key = 'build_status'"
-        )
         conn.commit()
         return aur_count
 
@@ -666,14 +654,28 @@ class PackageDB:
         with gzip.open(self.aur_json, "rt", encoding="utf-8") as fp:
             records = json.load(fp)
 
-        updated_count = 0
         cur = conn.cursor()
+        cur.execute(
+            "INSERT OR REPLACE INTO db_metadata (key, value) VALUES ('build_status', 'pending')"
+        )
 
         db_packages = {
             row["name"]: dict(row)
             for row in conn.execute("SELECT * FROM packages WHERE source = 'aur'")
         }
+        aur_package_names = {rec.get("Name") for rec in records if rec.get("Name")}
 
+        packages_to_delete = [
+            (name,) for name in db_packages if name not in aur_package_names
+        ]
+        if packages_to_delete:
+            cur.executemany(
+                "DELETE FROM packages WHERE name = ? AND source = 'aur'",
+                packages_to_delete,
+            )
+            LOGGER.info(f"Deleted {len(packages_to_delete)} obsolete AUR packages.")
+
+        packages_to_update = []
         for rec in records:
             pkg_name = rec.get("Name")
             if not pkg_name:
@@ -701,11 +703,34 @@ class PackageDB:
                         needs_update = True
 
             if needs_update:
-                self._insert_package_row(cur, rec, "aur")
-                self._insert_links(cur, rec, "aur")
-                self._insert_groups(cur, rec, "aur")
-                updated_count += 1
+                packages_to_update.append(rec)
 
+        if packages_to_update:
+            package_data = [
+                self._prepare_package_row_data(rec, "aur")
+                for rec in packages_to_update
+            ]
+            link_data = [
+                link
+                for rec in packages_to_update
+                for link in self._prepare_link_data(rec, "aur")
+            ]
+            group_data = [
+                group
+                for rec in packages_to_update
+                for group in self._prepare_group_data(rec, "aur")
+            ]
+
+            self._insert_package_row(cur, package_data)
+            self._insert_links(cur, link_data)
+            self._insert_groups(cur, group_data)
+
+        cur.execute(
+            "UPDATE db_metadata SET value = 'complete' WHERE key = 'build_status'"
+        )
+        conn.commit()
+
+        updated_count = len(packages_to_update)
         LOGGER.info(
             f"AUR packages ingested (full scan): {updated_count} new/updated packages processed."
         )
@@ -744,32 +769,49 @@ class PackageDB:
         cur = conn.cursor()
         current_system_packages, pkg_lookup = self._get_current_system_packages()
 
+        repo_pkg_data = []
         for name, version, source in current_system_packages:
             pkg_obj, source_name = pkg_lookup.get((name, version, source))
             if pkg_obj:
-                self._insert_repo_pkg(cur, pkg_obj, source_name)
+                repo_pkg_data.append((pkg_obj, source_name))
+
+        if repo_pkg_data:
+            self._insert_repo_pkg(cur, repo_pkg_data)
 
         LOGGER.info("Repo packages ingested.")
 
-    def _insert_package_row(
-        self, cur: sqlite3.Cursor, rec: Dict[str, Any], source: str
-    ) -> None:
-        # For AUR packages, we need to clear old links and groups before upserting
-        if source == "aur":
-            cur.execute(
-                "DELETE FROM links WHERE name = ? AND source = ?",
-                (rec.get("Name"), "aur"),
-            )
-            cur.execute(
-                "DELETE FROM package_groups WHERE name = ? AND source = ?",
-                (rec.get("Name"), "aur"),
-            )
+    def _prepare_package_row_data(
+        self, rec: Dict[str, Any], source: str
+    ) -> Tuple:
         metadata = {
             "License": rec.get("License", []),
             "Keywords": rec.get("Keywords", []),
             "CoMaintainers": rec.get("CoMaintainers", []),
         }
-        cur.execute(
+        return (
+            rec.get("ID"),
+            rec.get("Name"),
+            rec.get("Version"),
+            rec.get("Description"),
+            rec.get("URL"),
+            rec.get("URLPath"),
+            rec.get("Maintainer"),
+            rec.get("Submitter"),
+            rec.get("FirstSubmitted"),
+            rec.get("LastModified"),
+            rec.get("Popularity"),
+            rec.get("OutOfDate"),
+            rec.get("PackageBase"),
+            rec.get("PackageBaseID"),
+            rec.get("NumVotes"),
+            source,
+            json.dumps(metadata),
+        )
+
+    def _insert_package_row(
+        self, cur: sqlite3.Cursor, data: List[Tuple]
+    ) -> None:
+        cur.executemany(
             """INSERT INTO packages (
             pkg_id, name, version, description, url, url_path,
             maintainer, submitter, first_submitted, last_modified,
@@ -791,35 +833,10 @@ class PackageDB:
                 package_base_id=excluded.package_base_id,
                 num_votes=excluded.num_votes,
                 metadata=excluded.metadata""",
-            (
-                rec.get("ID"),
-                rec.get("Name"),
-                rec.get("Version"),
-                rec.get("Description"),
-                rec.get("URL"),
-                rec.get("URLPath"),
-                rec.get("Maintainer"),
-                rec.get("Submitter"),
-                rec.get("FirstSubmitted"),
-                rec.get("LastModified"),
-                rec.get("Popularity"),
-                rec.get("OutOfDate"),
-                rec.get("PackageBase"),
-                rec.get("PackageBaseID"),
-                rec.get("NumVotes"),
-                source,
-                json.dumps(metadata),
-            ),
+            data,
         )
 
-    def _insert_repo_pkg(self, cur: sqlite3.Cursor, pkg: Any, source: str) -> None:
-        cur.execute(
-            "DELETE FROM links WHERE name = ? AND source = ?", (pkg.name, source)
-        )
-        cur.execute(
-            "DELETE FROM package_groups WHERE name = ? AND source = ?",
-            (pkg.name, source),
-        )
+    def _prepare_repo_pkg_data(self, pkg: Any, source: str) -> Tuple:
         metadata = {
             "License": pkg.licenses,
             "files": [f[0] for f in getattr(pkg, "files", [])],
@@ -827,7 +844,66 @@ class PackageDB:
                 {"filename": b[0], "md5sum": b[1]} for b in getattr(pkg, "backup", [])
             ],
         }
-        cur.execute(
+        return (
+            pkg.name,
+            str(pkg.version),
+            pkg.desc,
+            pkg.url,
+            getattr(pkg, "filename", None),
+            getattr(pkg, "packager", None),
+            getattr(pkg, "arch", None),
+            getattr(pkg, "builddate", None),
+            getattr(pkg, "installdate", None),
+            getattr(pkg, "isize", None),
+            getattr(pkg, "size", None),
+            getattr(pkg, "md5sum", None),
+            getattr(pkg, "sha256sum", None),
+            getattr(pkg, "base64_sig", None),
+            getattr(pkg, "has_scriptlet", False),
+            source,
+            json.dumps(metadata),
+            getattr(pkg, "builddate", None),
+            getattr(pkg, "packager", None),
+        )
+
+    def _insert_repo_pkg(self, cur: sqlite3.Cursor, data: List[Tuple[Any, str]]) -> None:
+        package_data = [self._prepare_repo_pkg_data(pkg, source) for pkg, source in data]
+        link_data = [
+            link
+            for pkg, source in data
+            for link in self._prepare_link_data(
+                {
+                    "Name": pkg.name,
+                    "Version": str(pkg.version),
+                    "Depends": pkg.depends,
+                    "OptDepends": pkg.optdepends,
+                    "CheckDepends": getattr(pkg, "checkdepends", []),
+                    "MakeDepends": getattr(pkg, "makedepends", []),
+                    "Provides": pkg.provides,
+                    "Replaces": pkg.replaces,
+                    "Conflicts": pkg.conflicts,
+                },
+                source,
+            )
+        ]
+        group_data = [
+            group
+            for pkg, source in data
+            for group in self._prepare_group_data(
+                {"Name": pkg.name, "Groups": pkg.groups}, source
+            )
+        ]
+
+        cur.executemany(
+            "DELETE FROM links WHERE name = ? AND source = ?",
+            [(pkg.name, source) for pkg, source in data],
+        )
+        cur.executemany(
+            "DELETE FROM package_groups WHERE name = ? AND source = ?",
+            [(pkg.name, source) for pkg, source in data],
+        )
+
+        cur.executemany(
             """INSERT INTO packages (
             name, version, description, url, filename, packager, arch, build_date,
             install_date, isize, size, md5sum, sha256sum, base64_sig,
@@ -851,70 +927,46 @@ class PackageDB:
                 metadata=excluded.metadata,
                 last_modified=excluded.last_modified,
                 maintainer=excluded.maintainer""",
-            (
-                pkg.name,
-                str(pkg.version),
-                pkg.desc,
-                pkg.url,
-                getattr(pkg, "filename", None),
-                getattr(pkg, "packager", None),
-                getattr(pkg, "arch", None),
-                getattr(pkg, "builddate", None),
-                getattr(pkg, "installdate", None),
-                getattr(pkg, "isize", None),
-                getattr(pkg, "size", None),
-                getattr(pkg, "md5sum", None),
-                getattr(pkg, "sha256sum", None),
-                getattr(pkg, "base64_sig", None),
-                getattr(pkg, "has_scriptlet", False),
-                source,
-                json.dumps(metadata),
-                getattr(pkg, "builddate", None),
-                getattr(pkg, "packager", None),
-            ),
+            package_data,
         )
-        rec_like = {
-            "Name": pkg.name,
-            "Version": str(pkg.version),
-            "Depends": pkg.depends,
-            "OptDepends": pkg.optdepends,
-            "CheckDepends": getattr(pkg, "checkdepends", []),
-            "MakeDepends": getattr(pkg, "makedepends", []),
-            "Provides": pkg.provides,
-            "Replaces": pkg.replaces,
-            "Conflicts": pkg.conflicts,
-            "Groups": pkg.groups,
-        }
-        self._insert_links(cur, rec_like, source)
-        self._insert_groups(cur, rec_like, source)
+        self._insert_links(cur, link_data)
+        self._insert_groups(cur, group_data)
 
-    def _insert_links(
-        self, cur: sqlite3.Cursor, rec: Dict[str, Any], source: str
-    ) -> None:
+    def _prepare_link_data(
+        self, rec: Dict[str, Any], source: str
+    ) -> List[Tuple[str, str, str, str]]:
         name = rec["Name"]
         version = str(rec.get("Version"))
+        links = []
         for field in LINK_FIELDS:
             items = set(rec.get(field, []))
             if field == "Provides" and source != "aur" and version:
-                # Add implicit self-provide with cleaned version for repo packages
                 cleaned_version = version.split("-")[0].split(":")[-1]
                 items.add(f"{name}={cleaned_version}")
-
             if items:
-                cur.executemany(
-                    "INSERT INTO links (name, source, link_type, target) VALUES (?,?,?,?)",
-                    [(name, source, field, item) for item in items],
-                )
+                links.extend([(name, source, field, item) for item in items])
+        return links
 
-    def _insert_groups(
-        self, cur: sqlite3.Cursor, rec: Dict[str, Any], source: str
-    ) -> None:
+    def _insert_links(self, cur: sqlite3.Cursor, data: List[Tuple]) -> None:
+        cur.executemany(
+            "INSERT INTO links (name, source, link_type, target) VALUES (?,?,?,?)",
+            data,
+        )
+
+    def _prepare_group_data(
+        self, rec: Dict[str, Any], source: str
+    ) -> List[Tuple[str, str, str]]:
         name = rec["Name"]
+        groups = []
         if grp_list := rec.get("Groups", []):
-            cur.executemany(
-                "INSERT INTO package_groups VALUES (?,?,?)",
-                [(name, source, grp) for grp in grp_list],
-            )
+            groups.extend([(name, source, grp) for grp in grp_list])
+        return groups
+
+    def _insert_groups(self, cur: sqlite3.Cursor, data: List[Tuple]) -> None:
+        cur.executemany(
+            "INSERT INTO package_groups VALUES (?,?,?)",
+            data,
+        )
 
     def get_enriched_dependencies(
         self, package: Dict[str, Any]
