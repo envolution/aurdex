@@ -586,66 +586,6 @@ class PackageDB:
         conn.commit()
         return aur_count
 
-    # this ingestion only pulls newer LastModified
-    # it's ~2x the speed of _ingest_aur_full
-    # it doesn't update on:
-    # maintainer+comaintainer(Abandoned)
-    # out of date
-    # votes
-    # currently unused
-    def _ingest_aur(self, conn: sqlite3.Connection) -> int:
-        if not self.aur_json.is_file():
-            LOGGER.warning(f"AUR JSON file not found: {self.aur_json}, downloading...")
-            self._download_aur_json()
-
-        last_modified_ts = 0
-        try:
-            res = conn.execute(
-                "SELECT value FROM db_metadata WHERE key = 'last_modified_ts'"
-            ).fetchone()
-            if res:
-                last_modified_ts = int(res[0])
-        except (sqlite3.Error, ValueError) as e:
-            LOGGER.error(f"Error reading last_modified_ts from db: {e}")
-
-        self.db_age = os.path.getmtime(self.aur_json)
-        with gzip.open(self.aur_json, "rt", encoding="utf-8") as fp:
-            records = json.load(fp)
-
-        new_max_last_modified = last_modified_ts
-        updated_count = 0
-        cur = conn.cursor()
-
-        for rec in records:
-            if rec.get("LastModified", 0) > last_modified_ts:
-                self._insert_package_row(cur, rec, "aur")
-                self._insert_links(cur, rec, "aur")
-                self._insert_groups(cur, rec, "aur")
-                new_max_last_modified = max(
-                    new_max_last_modified, rec.get("LastModified", 0)
-                )
-                updated_count += 1
-
-        if updated_count > 0:
-            try:
-                conn.execute(
-                    "INSERT OR REPLACE INTO db_metadata (key, value) VALUES ('last_modified_ts', ?)",
-                    (str(new_max_last_modified),),
-                )
-            except sqlite3.Error as e:
-                LOGGER.error(f"Error writing last_modified_ts to db: {e}")
-
-        LOGGER.info(
-            f"AUR packages ingested: {updated_count} new/updated packages processed."
-        )
-        return updated_count
-
-    # this ingestion is much more complete
-    # it updates on:
-    # LastModified
-    # maintainer+comaintainer(Abandoned)
-    # out of date
-    # votes
     def _ingest_aur_full(self, conn: sqlite3.Connection) -> int:
         if not self.aur_json.is_file():
             LOGGER.warning(f"AUR JSON file not found: {self.aur_json}, downloading...")
@@ -707,8 +647,7 @@ class PackageDB:
 
         if packages_to_update:
             package_data = [
-                self._prepare_package_row_data(rec, "aur")
-                for rec in packages_to_update
+                self._prepare_package_row_data(rec, "aur") for rec in packages_to_update
             ]
             link_data = [
                 link
@@ -780,9 +719,7 @@ class PackageDB:
 
         LOGGER.info("Repo packages ingested.")
 
-    def _prepare_package_row_data(
-        self, rec: Dict[str, Any], source: str
-    ) -> Tuple:
+    def _prepare_package_row_data(self, rec: Dict[str, Any], source: str) -> Tuple:
         metadata = {
             "License": rec.get("License", []),
             "Keywords": rec.get("Keywords", []),
@@ -808,9 +745,7 @@ class PackageDB:
             json.dumps(metadata),
         )
 
-    def _insert_package_row(
-        self, cur: sqlite3.Cursor, data: List[Tuple]
-    ) -> None:
+    def _insert_package_row(self, cur: sqlite3.Cursor, data: List[Tuple]) -> None:
         cur.executemany(
             """INSERT INTO packages (
             pkg_id, name, version, description, url, url_path,
@@ -866,8 +801,12 @@ class PackageDB:
             getattr(pkg, "packager", None),
         )
 
-    def _insert_repo_pkg(self, cur: sqlite3.Cursor, data: List[Tuple[Any, str]]) -> None:
-        package_data = [self._prepare_repo_pkg_data(pkg, source) for pkg, source in data]
+    def _insert_repo_pkg(
+        self, cur: sqlite3.Cursor, data: List[Tuple[Any, str]]
+    ) -> None:
+        package_data = [
+            self._prepare_repo_pkg_data(pkg, source) for pkg, source in data
+        ]
         link_data = [
             link
             for pkg, source in data
