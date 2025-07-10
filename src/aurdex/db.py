@@ -568,7 +568,7 @@ class PackageDB:
         conn.execute(
             "INSERT OR REPLACE INTO db_metadata (key, value) VALUES ('build_status', 'pending')"
         )
-        aur_updated_count = self._ingest_aur(conn)
+        aur_updated_count = self._ingest_aur_full(conn)
         self._update_repo_incrementally(conn)
         conn.execute(
             "UPDATE db_metadata SET value = 'complete' WHERE key = 'build_status'"
@@ -590,7 +590,7 @@ class PackageDB:
         conn.execute(
             "INSERT INTO db_metadata (key, value) VALUES ('build_status', 'pending')"
         )
-        aur_count = self._ingest_aur(conn)
+        aur_count = self._ingest_aur_full(conn)
         self._ingest_repo(conn)
         conn.execute(
             "UPDATE db_metadata SET value = 'complete' WHERE key = 'build_status'"
@@ -598,6 +598,13 @@ class PackageDB:
         conn.commit()
         return aur_count
 
+    # this ingestion only pulls newer LastModified
+    # it's ~2x the speed of _ingest_aur_full
+    # it doesn't update on:
+    # maintainer+comaintainer(Abandoned)
+    # out of date
+    # votes
+    # currently unused
     def _ingest_aur(self, conn: sqlite3.Connection) -> int:
         if not self.aur_json.is_file():
             LOGGER.warning(f"AUR JSON file not found: {self.aur_json}, downloading...")
@@ -642,6 +649,65 @@ class PackageDB:
 
         LOGGER.info(
             f"AUR packages ingested: {updated_count} new/updated packages processed."
+        )
+        return updated_count
+
+    # this ingestion is much more complete
+    # it updates on:
+    # LastModified
+    # maintainer+comaintainer(Abandoned)
+    # out of date
+    # votes
+    def _ingest_aur_full(self, conn: sqlite3.Connection) -> int:
+        if not self.aur_json.is_file():
+            LOGGER.warning(f"AUR JSON file not found: {self.aur_json}, downloading...")
+            self._download_aur_json()
+
+        with gzip.open(self.aur_json, "rt", encoding="utf-8") as fp:
+            records = json.load(fp)
+
+        updated_count = 0
+        cur = conn.cursor()
+
+        db_packages = {
+            row["name"]: dict(row)
+            for row in conn.execute("SELECT * FROM packages WHERE source = 'aur'")
+        }
+
+        for rec in records:
+            pkg_name = rec.get("Name")
+            if not pkg_name:
+                continue
+
+            db_pkg = db_packages.get(pkg_name)
+            needs_update = False
+
+            if not db_pkg:
+                needs_update = True
+            else:
+                if rec.get("LastModified", 0) != (db_pkg.get("last_modified") or 0):
+                    needs_update = True
+                elif rec.get("Maintainer") != db_pkg.get("maintainer"):
+                    needs_update = True
+                elif rec.get("OutOfDate") != db_pkg.get("out_of_date"):
+                    needs_update = True
+                elif rec.get("NumVotes", 0) != (db_pkg.get("num_votes") or 0):
+                    needs_update = True
+                else:
+                    db_metadata = json.loads(db_pkg.get("metadata", "{}"))
+                    db_comaintainers = db_metadata.get("CoMaintainers", [])
+                    aur_comaintainers = rec.get("CoMaintainers", [])
+                    if sorted(db_comaintainers) != sorted(aur_comaintainers):
+                        needs_update = True
+
+            if needs_update:
+                self._insert_package_row(cur, rec, "aur")
+                self._insert_links(cur, rec, "aur")
+                self._insert_groups(cur, rec, "aur")
+                updated_count += 1
+
+        LOGGER.info(
+            f"AUR packages ingested (full scan): {updated_count} new/updated packages processed."
         )
         return updated_count
 
