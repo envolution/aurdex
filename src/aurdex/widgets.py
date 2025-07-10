@@ -84,7 +84,7 @@ class CustomHeader(Container):
             return f"database update: [b green]{int(age_seconds / 60)}m ago[/b green]"
         elif age_seconds < 86400:
             return (
-                f"database update: [b orange]{int(age_seconds / 3600)}h ago[/b orange]"
+                f"database update: [b yellow]{int(age_seconds / 3600)}h ago[/b yellow]"
             )
         else:
             return f"database update: [b red]{int(age_seconds / 86400)}d ago[/b red]"
