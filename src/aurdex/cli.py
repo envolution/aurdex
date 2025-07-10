@@ -83,7 +83,7 @@ def main():
 
     console = Console()
 
-    if args.rebuild_db:
+    if args.rebuild:
         db = PackageDB(console=console)
         num_updates = 0
         try:
@@ -92,7 +92,7 @@ def main():
         except Exception as e:
             console.print(f"[bold red]Database rebuild failed: {e}[/bold red]")
         return
-    elif args.update_db:
+    elif args.update:
         db = PackageDB(console=console)
         try:
             num_updates = db.rebuild(full=False, download=True)
