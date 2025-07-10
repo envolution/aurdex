@@ -70,12 +70,12 @@ def main():
         help="Resolve and display the deep dependency installation tree for one or more packages.",
     )
     parser.add_argument(
-        "--rebuild-db",
+        "--rebuild",
         action="store_true",
         help="Force a full download and rebuild of the package database.",
     )
     parser.add_argument(
-        "--update-db",
+        "--update",
         action="store_true",
         help="Download AUR metadata and update the package database.",
     )
@@ -113,7 +113,7 @@ def main():
         console.print(
             f"[bold]Resolving {'deep' if deep_search else 'shallow'} dependency tree for: {', '.join(package_names)}...[/bold]"
         )
-        
+
         if deep_search:
             result = resolver.resolve_dependency_tree_deep(package_names)
         else:
