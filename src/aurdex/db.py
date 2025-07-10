@@ -26,7 +26,7 @@ except ModuleNotFoundError:
     _HAVE_PYALPM = False
 
 LOGGER = logging.getLogger(__name__)
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 APP_NAME = "aurdex"
 AUR_JSON = Path(user_cache_dir(APP_NAME)) / "packages-meta-ext-v1.json.gz"
 AUR_DB_URL = "https://aur.manjaro.org/packages-meta-ext-v1.json.gz"
@@ -556,10 +556,14 @@ class PackageDB:
             LOGGER.info(
                 f"Adding/updating {len(packages_to_add_or_update)} repo/local packages."
             )
+            repo_pkg_data = []
             for name, version, source in packages_to_add_or_update:
                 pkg_obj, source_name = pkg_lookup.get((name, version, source))
                 if pkg_obj:
-                    self._insert_repo_pkg(cur, pkg_obj, source_name)
+                    repo_pkg_data.append((pkg_obj, source_name))
+
+            if repo_pkg_data:
+                self._insert_repo_pkg(cur, repo_pkg_data)
 
         LOGGER.info("Incremental repo update finished.")
 
