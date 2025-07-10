@@ -125,7 +125,7 @@ class FilterModal(ModalScreen[bool | None]):
         self.all_repos = all_repos or []
 
     def compose(self) -> ComposeResult:
-        with Container(id="modal-dialog-scrim"):
+        with VerticalScroll(id="modal-dialog-scrim"):
             with Container(id="filter-modal-dialog"):
                 if self.all_repos:
                     yield Label("Repositories to include", classes="filter-separator")
@@ -190,7 +190,7 @@ class SortModal(ModalScreen[Optional[Dict[str, Any]]]):
         self.current_sort_reverse = current_sort_reverse
 
     def compose(self) -> ComposeResult:
-        with Container(id="modal-dialog-scrim"):
+        with VerticalScroll(id="modal-dialog-scrim"):
             with Container(id="sort-modal-dialog"):
                 yield Label("Sort packages by:", id="sort-title")
                 with RadioSet(id="sort-options"):
