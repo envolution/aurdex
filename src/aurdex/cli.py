@@ -112,6 +112,8 @@ def main():
     args = parser.parse_args()
 
     console = Console()
+    arg_dict = vars(args)
+    active_flags = {k: v for k, v in arg_dict.items() if v not in (None, False)}
 
     if args.rebuild:
         db = PackageDB(console=console)
@@ -121,7 +123,10 @@ def main():
             console.print(f"[bold green]{num_updates} packages rebuilt.[/bold green]")
         except Exception as e:
             console.print(f"[bold red]Database rebuild failed: {e}[/bold red]")
-        return
+
+        if len(active_flags) == 2:  # avoid launching gui if we're only rebuilding
+            return
+
     elif args.update:
         db = PackageDB(console=console)
         try:
@@ -129,7 +134,9 @@ def main():
             console.print(f"[bold green]{num_updates} packages updated.[/bold green]")
         except Exception as e:
             console.print(f"[bold red]Database update failed: {e}[/bold red]")
-        return
+
+        if len(active_flags) == 2:  # avoid launching gui if we're only updating
+            return
 
     # --- Database Preparation ---
     db = PackageDB(console=console)
