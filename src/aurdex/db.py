@@ -339,6 +339,26 @@ class PackageDB:
                         if key == "out_of_date"
                         else "(p.maintainer IS NULL OR p.maintainer = '')"
                     )
+            elif key in ["comaintainers"] and value:
+                where_clauses.append(
+                    """
+                    EXISTS (
+                        SELECT 1 FROM json_each(json_extract(p.metadata, '$.CoMaintainers'))
+                        WHERE json_each.value = ? COLLATE NOCASE
+                    )
+                    """
+                )
+                params.append(f"{value}")
+            elif key in ["license"] and value:
+                where_clauses.append(
+                    """
+                    EXISTS (
+                        SELECT 1 FROM json_each(json_extract(p.metadata, '$.License'))
+                        WHERE json_each.value = ? COLLATE NOCASE
+                    )
+                    """
+                )
+                params.append(f"{value}")
             elif link_type and value:
                 alias = f"l_{key}"
                 joins.append(

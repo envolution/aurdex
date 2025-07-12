@@ -43,6 +43,8 @@ def main():
         "provides",
         "out_of_date",
         "abandoned",
+        "comaintainers",
+        "license",
     ]
     PAGER_ENABLE = 40  # how many outputs before using PAGER
     appname = "aurdex"
