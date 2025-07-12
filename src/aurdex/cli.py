@@ -75,7 +75,7 @@ def main():
         "--limit",
         type=int,
         default=20,
-        help="Limit results to integer limit.  Defaults to 20",
+        help="Limit results to integer limit.  Defaults to 20, '-1' sets to infinite.",
     )
     parser.add_argument(
         "-f",
