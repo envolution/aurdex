@@ -315,6 +315,13 @@ class PackageDB:
         offset: int = 0,
     ) -> List[Dict[str, Any]]:
         filters = filters or {}
+        link_type_filters = {
+            "provides": "Provides",
+            "depends": "Depends",
+            "makedepends": "MakeDepends",
+            "checkdepends": "CheckDepends",
+            "optdepends": "OptDepends",
+        }
         query = "SELECT DISTINCT p.source, p.name, p.version, COALESCE(p.popularity, 0.0) AS popularity, COALESCE(p.num_votes, 0) AS num_votes, p.pkg_id FROM packages p"
         params: List[Any] = []
         where_clauses, joins = [], []
@@ -324,6 +331,7 @@ class PackageDB:
             where_clauses.append(f"(p.name {operator} ?)")
             params.append(search_val)
         for key, value in filters.items():
+            link_type = link_type_filters.get(key)
             if key in ["abandoned", "out_of_date"]:
                 if value:
                     where_clauses.append(
@@ -331,14 +339,13 @@ class PackageDB:
                         if key == "out_of_date"
                         else "(p.maintainer IS NULL OR p.maintainer = '')"
                     )
-            elif key == "provides" and value:
+            elif link_type and value:
+                alias = f"l_{key}"
                 joins.append(
-                    "JOIN links l_provides ON p.name = l_provides.name AND p.source = l_provides.source"
+                    f"JOIN links {alias} ON p.name = {alias}.name AND p.source = {alias}.source"
                 )
-                where_clauses.append(
-                    "l_provides.link_type = 'Provides' AND l_provides.target LIKE ?"
-                )
-                params.append(f"{value}%")
+                where_clauses.append(f"{alias}.link_type = ? AND {alias}.target LIKE ?")
+                params.extend([link_type, f"{value}%"])
             elif isinstance(value, str) and value:
                 operator = "REGEXP" if self._is_regex(value) else "="
                 where_clauses.append(f"p.{key} {operator} ?")

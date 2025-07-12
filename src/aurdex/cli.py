@@ -33,6 +33,17 @@ def translate_textual_to_rich_markup(markup_string: str) -> str:
 
 
 def main():
+    valid_filter_keys = [
+        "maintainer",
+        "source",
+        "depends",
+        "makedepends",
+        "checkdepends",
+        "optdepends",
+        "provides",
+        "out_of_date",
+        "abandoned",
+    ]
     PAGER_ENABLE = 20  # how many outputs before using PAGER
     appname = "aurdex"
     parser = argparse.ArgumentParser(
@@ -57,15 +68,17 @@ def main():
         "--search",
         nargs="+",
         metavar="TERM",
-        help="(WIP) Search package name for info.",
+        help="One or more search terms. Regular expressions are automatically detected (e.g. '^lib.*').",
     )
-    parser.add_argument("--test-search", action="store_true", help="(WIP)")
     parser.add_argument(
         "-f",
         "--filter",
         metavar="key=value",
         action="append",
-        help="(WIP) apply filters to cli search.",
+        help=(
+            'Apply one or more filters (can be repeated and combined with --search). Example: "-f maintainer=alice -f out_of_date"\n'
+            f"\nSupported keys: {', '.join(valid_filter_keys)}"
+        ),
     )
     parser.add_argument(
         "--deptree",
@@ -201,13 +214,16 @@ def main():
                 key = f.strip().lower()
                 value = "true"  # default for boolean-style flags
             filters[key] = value
+    if args.search or args.filter:
+        terms = args.search or [""]  # empty search if no terms given
+        for term in terms:
+            if filters:
+                console.print(
+                    f"[bold cyan]Running search for '{term}' with {filters}...[/bold cyan]"
+                )
+            else:
+                console.print(f"[bold cyan]Running search for {term}...[/bold cyan]")
 
-    if args.search:
-        console.print("[bold cyan]Running search...[/bold cyan]")
-        from pprint import pprint
-
-        pprint(filters)
-        for term in args.search:
             results = db.search(search_term=term, filters=filters)
 
             if results:
@@ -234,32 +250,6 @@ def main():
                     console.print(output_header)
                     console.print(table)
 
-        return
-
-    if args.test_search:
-        console.print("[bold cyan]Running search test...[/bold cyan]")
-        results1 = db.search()
-        console.print(f"Test 1 (no filters): Found {len(results1)} packages.")
-
-        search_term = "yay"
-        results2 = db.search(search_term=search_term)
-        console.print(
-            f"Test 2 (search_term='{search_term}'): Found {len(results2)} packages."
-        )
-        if results2:
-            console.print("First 5 results:")
-            for pkg in results2[:5]:
-                console.print(f"  - {pkg['name']} ({pkg['source']})")
-
-        maintainer = "envolution"
-        results3 = db.search(filters={"maintainer": maintainer})
-        console.print(
-            f"Test 3 (maintainer='{maintainer}'): Found {len(results3)} packages."
-        )
-        if results3:
-            console.print("First 5 results:")
-            for pkg in results3[:5]:
-                console.print(f"  - {pkg['name']} ({pkg['source']})")
         return
 
     if args.package_name:
