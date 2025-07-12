@@ -44,7 +44,7 @@ def main():
         "out_of_date",
         "abandoned",
     ]
-    PAGER_ENABLE = 20  # how many outputs before using PAGER
+    PAGER_ENABLE = 40  # how many outputs before using PAGER
     appname = "aurdex"
     parser = argparse.ArgumentParser(
         description="Aurdex - A terminal UI for the Arch User Repository."
@@ -69,6 +69,13 @@ def main():
         nargs="+",
         metavar="TERM",
         help="One or more search terms. Regular expressions are automatically detected (e.g. '^lib.*').",
+    )
+    parser.add_argument(
+        "-l",
+        "--limit",
+        type=int,
+        default=20,
+        help="Limit results to integer limit.  Defaults to 20",
     )
     parser.add_argument(
         "-f",
@@ -214,6 +221,7 @@ def main():
                 key = f.strip().lower()
                 value = "true"  # default for boolean-style flags
             filters[key] = value
+
     if args.search or args.filter:
         terms = args.search or [""]  # empty search if no terms given
         for term in terms:
@@ -224,7 +232,7 @@ def main():
             else:
                 console.print(f"[bold cyan]Running search for {term}...[/bold cyan]")
 
-            results = db.search(search_term=term, filters=filters)
+            results = db.search(search_term=term, filters=filters, limit=args.limit)
 
             if results:
                 table = Table(show_header=True, pad_edge=True)
@@ -234,7 +242,7 @@ def main():
                 for pkg in results:
                     table.add_row(pkg["source"], pkg["name"], pkg["version"])
 
-                output_header = f"[b]{term}[/b]: Found {len(results)} packages."
+                output_header = f"[b]'{term}'[/b]: Found {len(results)} packages (limit: {args.limit})."
                 output_hint = (
                     "[bold cyan]Using PAGER...[/bold cyan]"
                     if len(results) > PAGER_ENABLE
