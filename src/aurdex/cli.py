@@ -227,6 +227,12 @@ def main():
             else:
                 key = f.strip().lower()
                 value = "true"  # default for boolean-style flags
+
+            if key not in valid_filter_keys:
+                parser.error(
+                    f"Invalid filter key: '{key}'.\n"
+                    f"Valid filter keys are: {', '.join(valid_filter_keys)}"
+                )
             filters[key] = value
 
     if args.search or args.filter:
