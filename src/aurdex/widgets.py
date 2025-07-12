@@ -3,7 +3,7 @@ import httpx
 import logging as log
 import time
 from datetime import datetime
-from typing import Optional, List, Dict, Any, Tuple, TYPE_CHECKING
+from typing import cast, Optional, List, Dict, Any, Tuple, TYPE_CHECKING
 
 from textual import on, work
 from textual.binding import Binding
@@ -41,17 +41,18 @@ from bs4 import BeautifulSoup
 from bs4.element import NavigableString, Tag
 
 if TYPE_CHECKING:
+    import pygit2
+    from pygit2.repository import Repository
     from .main import aurdex
 
 
-# optionals
 try:
-    import pygit2  # type: ignore
+    import pygit2
+    from pygit2.repository import Repository
 
     PYGIT2_AVAILABLE = True
 except ImportError:
     PYGIT2_AVAILABLE = False
-    pygit2 = None  # type: ignore
 
 
 class CustomHeader(Container):
@@ -114,8 +115,8 @@ class FilterModal(ModalScreen[bool | None]):
         initial_out_of_date: bool = False,
         initial_maintainer: str = "",
         initial_provides: str = "",
-        repo_filters: Dict[str, bool] = None,
-        all_repos: List[str] = None,
+        repo_filters: Optional[Dict[str, bool]] = None,
+        all_repos: Optional[List[str]] = None,
         **kwargs,
     ) -> None:
         super().__init__(**kwargs)
@@ -250,15 +251,12 @@ class SortModal(ModalScreen[Optional[Dict[str, Any]]]):
 class PackageDetails(VerticalScroll):
     """Widget to display detailed package information"""
 
-    if TYPE_CHECKING:
-        app: aurdex
-
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._static_content = Static(id="package-details-content")
         self.package_data: Optional[Dict[str, Any]] = None
         self.enriched_dependencies: Optional[Dict[str, List[Dict]]] = None
-        self.enriched_dependants: Optional[List[Dict]] = None
+        self.enriched_dependants: Optional[Dict[str, List[Dict]]] = None
 
     def compose(self):
         yield self._static_content
@@ -291,7 +289,7 @@ class PackageDetails(VerticalScroll):
             package=package,
             enriched_dependencies=enriched_dependencies,
             enriched_dependants=enriched_dependants,
-            installed_packages=self.app.provide_db.installed_packages,
+            installed_packages=cast("aurdex", self.app).provide_db.installed_packages,
         )
         self.update(formatted_text)
 
@@ -319,8 +317,7 @@ class GitViewModal(ModalScreen[None]):
         )
 
         os.makedirs(self.repo_path, exist_ok=True)
-
-        self.repo: Optional[pygit2.Repository] = None
+        self.repo: Optional[Repository] = None
 
     def compose(self) -> ComposeResult:
         with Container(id="git-modal-container"):
@@ -368,7 +365,7 @@ class GitViewModal(ModalScreen[None]):
         file_tree = self.query_one("#git-file-tree", DirectoryTree)
         commit_table = self.query_one("#git-commit-history", DataTable)
 
-        if not pygit2:
+        if not PYGIT2_AVAILABLE:
             self.app.call_from_thread(
                 status_label.update, "[b red]Pygit2 not loaded (internal error).[/]"
             )
@@ -378,18 +375,19 @@ class GitViewModal(ModalScreen[None]):
             self.app.call_from_thread(status_label.update, "Accessing local cache...")
 
             is_repo = False
-            try:
-                if pygit2.Repository(self.repo_path).is_bare == False:
-                    is_repo = os.path.exists(os.path.join(self.repo_path, ".git"))
-            except pygit2.GitError:
-                is_repo = False
+            if PYGIT2_AVAILABLE:
+                try:
+                    if not Repository(self.repo_path).is_bare:
+                        is_repo = os.path.exists(os.path.join(self.repo_path, ".git"))
+                except pygit2.GitError:
+                    is_repo = False
 
             if is_repo:
                 self.app.call_from_thread(
                     status_label.update,
                     f"Pulling latest changes for [b]{self.package_base}[/]...",
                 )
-                self.repo = pygit2.Repository(self.repo_path)
+                self.repo = Repository(self.repo_path)
 
                 if self.repo is not None:
                     remote = self.repo.remotes["origin"]
@@ -408,7 +406,7 @@ class GitViewModal(ModalScreen[None]):
                             if self.repo.lookup_reference(ref_name_option):
                                 remote_head_ref_name = ref_name_option
                                 break
-                        except pygit2.KeyError:
+                        except pygit2.GitError:
                             continue
 
                     if not remote_head_ref_name:
@@ -426,7 +424,7 @@ class GitViewModal(ModalScreen[None]):
                     self.repo.references[local_branch_ref_name].set_target(
                         remote_head_commit_id
                     )
-                    self.repo.checkout_head(strategy=pygit2.GIT_CHECKOUT_FORCE)
+                    self.repo.checkout_head(strategy=pygit2.GIT_CHECKOUT_FORCE)  # type: ignore[attr-defined]
                     self.app.call_from_thread(status_label.update, "Pull complete.")
             else:
                 self.app.call_from_thread(
@@ -443,7 +441,7 @@ class GitViewModal(ModalScreen[None]):
             if self.repo:
                 for commit in self.repo.walk(
                     self.repo.head.target,
-                    pygit2.GIT_SORT_TIME,
+                    pygit2.GIT_SORT_TIME,  # type: ignore[attr-defined]
                 ):
                     commits_data.append(
                         {
@@ -553,7 +551,7 @@ class GitViewModal(ModalScreen[None]):
                 parent_tree, commit.tree, context_lines=3, interhunk_lines=1
             )
 
-            diff_text = diff.patch
+            diff_text = diff.patch  # type: ignore[attr-defined]
             if not diff_text:
                 diff_text = "No textual changes in this commit."
 
@@ -738,7 +736,9 @@ class CommentsModal(ModalScreen[None]):
         soup = BeautifulSoup(html_content, "html.parser")
         extracted_comments = []
 
-        comment_sections = soup.find_all("div", class_="comments package-comments")
+        comment_sections = cast(
+            Any, soup.find_all("div", class_="comments package-comments")
+        )
 
         for section_div in comment_sections:
             section_is_pinned = False
@@ -848,8 +848,9 @@ class CommentsModal(ModalScreen[None]):
         has_next_page = False
         if html_content:
             soup_nav = BeautifulSoup(html_content, "html.parser")
+            string = lambda s: s is not None and "Next" in s
             has_next_page = bool(
-                soup_nav.find("a", class_="page", string=lambda s: s and "Next" in s)
+                cast(Any, soup_nav.find("a", class_="page", string=string))
             )
 
         if html_content:

@@ -2,6 +2,8 @@ Screen {
     layout: vertical;
     background: $background;
     height: 100vh;
+    layers: below above;
+    align:center middle;
 }
 CustomHeader {
     dock: top;
@@ -24,12 +26,11 @@ CustomHeader {
 
 #loading-indicator {
     layer: above;
-    position: relative;
-    content-align: center middle;
-    width: 1fr;
-    height: 1fr;
-    dock: top;
+    align: center middle;
+    width: 50%;
+    height: 5;
     background: rgba(0, 0, 0, 0.2);
+    border: round $primary;
 }
 
 #main-container {

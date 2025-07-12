@@ -187,7 +187,7 @@ def format_package_details(
                                     provider_pkg_item.get("resolution_type")
                                     == "replaces"
                                 ):
-                                    resolution_text = f" [b $warning][dim]-⚠️ Replaces {dep_item['name']}-[/dim][/]"
+                                    resolution_text = f" [b $warning][dim]Replaces '{dep_item['name']}'[/dim][/]"
 
                                 line = (
                                     f"    {tree_char}{status_icon}"

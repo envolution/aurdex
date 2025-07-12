@@ -1,7 +1,6 @@
 import os
 import appdirs
 import json
-import re
 import logging as log
 import time
 import threading
@@ -148,8 +147,6 @@ class aurdex(App):
 
     def action_reset_filters(self) -> None:
         self.filters = self.default_filters_structure.copy()
-        self.search_term = ""
-        self.query_one("#search-input", Input).value = ""
         self.filter_packages()
         self.update_package_list()
         self.update_filter_status()
@@ -291,7 +288,6 @@ class aurdex(App):
             filters=self.filters,
             sort_by=sort_by,
             sort_reverse=self.current_sort_reverse,
-            limit=200000,
         )
         self.call_from_thread(self.update_search_results, results)
 
@@ -572,7 +568,7 @@ class aurdex(App):
         if self._dep_resolve_cancel_event:
             self._dep_resolve_cancel_event.set()
 
-        if not event.row_key.value:
+        if not event.row_key or not event.row_key.value:
             return
 
         details_pane = self.query_one("#package-details", PackageDetails)
@@ -590,7 +586,7 @@ class aurdex(App):
 
     @on(DataTable.RowSelected, "#package-table")
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
-        if not event.row_key.value:
+        if not event.row_key or not event.row_key.value:
             return
         name, source = event.row_key.value.split(":")
         package = self.provide_db.package_info(name=name, source=source)

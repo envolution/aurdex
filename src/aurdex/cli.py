@@ -1,8 +1,10 @@
 import argparse
 import importlib.metadata
+from contextlib import nullcontext
 import json
 import os
 from rich.console import Console
+from rich.table import Table
 from rich.tree import Tree
 import appdirs
 
@@ -31,6 +33,7 @@ def translate_textual_to_rich_markup(markup_string: str) -> str:
 
 
 def main():
+    PAGER_ENABLE = 20  # how many outputs before using PAGER
     appname = "aurdex"
     parser = argparse.ArgumentParser(
         description="Aurdex - A terminal UI for the Arch User Repository."
@@ -57,6 +60,13 @@ def main():
         help="(WIP) Search package name for info.",
     )
     parser.add_argument("--test-search", action="store_true", help="(WIP)")
+    parser.add_argument(
+        "-f",
+        "--filter",
+        metavar="key=value",
+        action="append",
+        help="(WIP) apply filters to cli search.",
+    )
     parser.add_argument(
         "--deptree",
         nargs="+",
@@ -179,17 +189,50 @@ def main():
         console.print(tree)
         return
 
+    filters = {}
+    if args.filter:
+        for f in args.filter:
+            # Handle key[=value] format
+            if "=" in f:
+                key, value = f.split("=", 1)
+                key = key.strip().lower()
+                value = value.strip().lower()
+            else:
+                key = f.strip().lower()
+                value = "true"  # default for boolean-style flags
+            filters[key] = value
+
     if args.search:
         console.print("[bold cyan]Running search...[/bold cyan]")
+        from pprint import pprint
 
+        pprint(filters)
         for term in args.search:
-            results = db.search(search_term=term)
-            console.print(f"[b]{term}[/b]: Found {len(results)} packages.")
+            results = db.search(search_term=term, filters=filters)
 
             if results:
-                console.print("  First 20 results:")
-                for pkg in results[:20]:
-                    console.print(f"    - {pkg['name']} ({pkg['source']})")
+                table = Table(show_header=True, pad_edge=True)
+                table.add_column("Source", style="cyan", no_wrap=True, justify="right")
+                table.add_column("Name", style="bold")
+                table.add_column("Version", style="dim")
+                for pkg in results:
+                    table.add_row(pkg["source"], pkg["name"], pkg["version"])
+
+                output_header = f"[b]{term}[/b]: Found {len(results)} packages."
+                output_hint = (
+                    "[bold cyan]Using PAGER...[/bold cyan]"
+                    if len(results) > PAGER_ENABLE
+                    else "[bold cyan]Printing directly...[/bold cyan]"
+                )
+
+                console.print(output_hint)
+                output_func = (
+                    console.pager if len(results) > PAGER_ENABLE else nullcontext
+                )
+
+                with output_func():
+                    console.print(output_header)
+                    console.print(table)
 
         return
 

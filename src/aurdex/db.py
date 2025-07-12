@@ -121,9 +121,6 @@ def regexp(expr, item):
     return reg.search(item) is not None
 
 
-import time
-
-
 class PackageDB:
     """Unified AUR / repo package cache."""
 
@@ -149,10 +146,10 @@ class PackageDB:
         if not _HAVE_PYALPM:
             return {}
         try:
-            handle = pyalpm.Handle("/", "/var/lib/pacman")
+            handle = pyalpm.Handle("/", "/var/lib/pacman")  # type: ignore[attr-defined]
             localdb = handle.get_localdb()
             return {pkg.name: pkg.version for pkg in localdb.pkgcache}
-        except pyalpm.error as e:
+        except pyalpm.error as e:  # type: ignore[attr-defined]
             LOGGER.error(f"Could not read local package database: {e}")
             return {}
 
@@ -162,13 +159,13 @@ class PackageDB:
             return {}
         provides_map = {}
         try:
-            handle = pyalpm.Handle("/", "/var/lib/pacman")
+            handle = pyalpm.Handle("/", "/var/lib/pacman")  # type: ignore[attr-defined]
             localdb = handle.get_localdb()
             for pkg in localdb.pkgcache:
                 for p in pkg.provides:
                     provided_name = p.split("=")[0].strip()
                     provides_map[provided_name] = pkg.name
-        except pyalpm.error as e:
+        except pyalpm.error as e:  # type: ignore[attr-defined]
             LOGGER.error(f"Could not read local package database for provides: {e}")
         return provides_map
 
@@ -314,7 +311,7 @@ class PackageDB:
         filters: Optional[Dict[str, Any]] = None,
         sort_by: str = "popularity",
         sort_reverse: bool = True,
-        limit: int = 1000,
+        limit: int = -1,  # No limit
         offset: int = 0,
     ) -> List[Dict[str, Any]]:
         filters = filters or {}
@@ -448,7 +445,7 @@ class PackageDB:
                     if self.console:
                         with self.console.status(
                             "[bold green]Downloading metadata...", spinner="dots"
-                        ) as status:
+                        ):
                             for chunk in response.iter_bytes():
                                 f.write(chunk)
                     else:
@@ -500,8 +497,10 @@ class PackageDB:
         return self._rebuild(conn)
 
     def _get_pyalpm_handle(self):
+        if not _HAVE_PYALPM:
+            return None
         if self._pyalpm_handle is None:
-            handle = pyalpm.Handle("/", "/var/lib/pacman")
+            handle = pyalpm.Handle("/", "/var/lib/pacman")  # type: ignore[attr-defined]
             repo_regex = re.compile(r"^\[(.+)\]$")
             try:
                 with open("/etc/pacman.conf", "r") as f:
@@ -510,11 +509,12 @@ class PackageDB:
                             repo_name = match.group(1)
                             if repo_name.lower() != "options":
                                 handle.register_syncdb(
-                                    repo_name, pyalpm.SIG_DATABASE_OPTIONAL
+                                    repo_name,
+                                    pyalpm.SIG_DATABASE_OPTIONAL,  # type: ignore[attr-defined]
                                 )
             except FileNotFoundError:
                 LOGGER.error("/etc/pacman.conf not found. Cannot register sync repos.")
-            except pyalpm.error as e:
+            except pyalpm.error as e:  # type: ignore[attr-defined]
                 LOGGER.error(f"Error registering sync repos: {e}")
             self._pyalpm_handle = handle
         return self._pyalpm_handle
@@ -527,6 +527,8 @@ class PackageDB:
 
         # --- Step 1: Get CURRENT state from pyalpm (Sync Repos + Local DB) ---
         current_system_packages, pkg_lookup = self._get_current_system_packages()
+        if not current_system_packages:
+            return
 
         # --- Step 2: Get STORED state from our database ---
         stored_system_packages = {
@@ -680,7 +682,11 @@ class PackageDB:
         return updated_count
 
     def _get_current_system_packages(self) -> Tuple[set, dict]:
+        if not _HAVE_PYALPM:
+            return set(), {}
         handle = self._get_pyalpm_handle()
+        if not handle:
+            return set(), {}
 
         current_system_packages = set()
         pkg_lookup = {}
@@ -776,12 +782,14 @@ class PackageDB:
         )
 
     def _prepare_repo_pkg_data(self, pkg: Any, source: str) -> Tuple:
+        files = getattr(pkg, "files", None)
+        backup = getattr(pkg, "backup", None)
         metadata = {
             "License": pkg.licenses,
-            "files": [f[0] for f in getattr(pkg, "files", [])],
-            "backup": [
-                {"filename": b[0], "md5sum": b[1]} for b in getattr(pkg, "backup", [])
-            ],
+            "files": [f[0] for f in files] if files is not None else [],
+            "backup": [{"filename": b[0], "md5sum": b[1]} for b in backup]
+            if backup is not None
+            else [],
         }
         return (
             pkg.name,
@@ -882,7 +890,10 @@ class PackageDB:
         version = str(rec.get("Version"))
         links = []
         for field in LINK_FIELDS:
-            items = set(rec.get(field, []))
+            items_val = rec.get(field)
+            if items_val is None:
+                continue
+            items = set(items_val)
             if field == "Provides" and source != "aur" and version:
                 cleaned_version = version.split("-")[0].split(":")[-1]
                 items.add(f"{name}={cleaned_version}")
@@ -901,7 +912,8 @@ class PackageDB:
     ) -> List[Tuple[str, str, str]]:
         name = rec["Name"]
         groups = []
-        if grp_list := rec.get("Groups", []):
+        grp_list = rec.get("Groups")
+        if grp_list:
             groups.extend([(name, source, grp) for grp in grp_list])
         return groups
 
@@ -1285,7 +1297,7 @@ class DependencyResolver:
 
     def get_repo_names(self) -> List[str]:
         """Returns a list of unique repository names."""
-        with self.connection() as conn:
+        with self.db.connection() as conn:
             return [
                 row[0]
                 for row in conn.execute(
