@@ -1,6 +1,6 @@
 # aurdex
 
-**aurdex** is a terminal user interface (TUI) for browsing AUR package metadata.
+**aurdex** is a CLI and terminal user interface (TUI) for browsing AUR package metadata.
 
 - Filter and search packages by name, maintainer, status, and more
 - View detailed metadata, dependencies, and reverse dependencies
